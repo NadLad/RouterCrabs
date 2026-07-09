@@ -9,33 +9,52 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio_stream::StreamExt;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // ── Config ──────────────────────────────────────────────────────────────
 
-struct AppConfig {
-    flash_model: String,
-    pro_model: String,
+struct ModelConfig {
     api_key: String,
     api_base: String,
+    model: String,
+    auth_header: String,
+}
+
+struct AppConfig {
+    flash: ModelConfig,
+    pro: ModelConfig,
     port: u16,
+    complexity_threshold: u32,
+}
+
+impl ModelConfig {
+    fn from_env(prefix: &str) -> Self {
+        Self {
+            api_key: std::env::var(format!("{}_API_KEY", prefix))
+                .unwrap_or_else(|_| panic!("{}_API_KEY doit être défini", prefix)),
+            api_base: std::env::var(format!("{}_API_BASE", prefix))
+                .unwrap_or_else(|_| panic!("{}_API_BASE doit être défini", prefix)),
+            model: std::env::var(format!("{}_MODEL", prefix))
+                .unwrap_or_else(|_| panic!("{}_MODEL doit être défini", prefix)),
+            auth_header: std::env::var(format!("{}_AUTH_HEADER", prefix))
+                .unwrap_or_else(|_| "Bearer".into()),
+        }
+    }
 }
 
 impl AppConfig {
     fn from_env() -> Self {
         Self {
-            flash_model: std::env::var("FLASH_MODEL")
-                .unwrap_or_else(|_| "deepseek-v4-flash".into()),
-            pro_model: std::env::var("PRO_MODEL")
-                .unwrap_or_else(|_| "deepseek-v4-pro".into()),
-            api_key: std::env::var("DEEPSEEK_API_KEY")
-                .expect("DEEPSEEK_API_KEY doit être défini"),
-            api_base: std::env::var("DEEPSEEK_API_BASE")
-                .unwrap_or_else(|_| "https://api.deepseek.com".into()),
+            flash: ModelConfig::from_env("FLASH"),
+            pro: ModelConfig::from_env("PRO"),
             port: std::env::var("PORT")
                 .unwrap_or_else(|_| "8001".into())
                 .parse()
                 .expect("PORT invalide"),
+            complexity_threshold: std::env::var("COMPLEXITY_THRESHOLD")
+                .unwrap_or_else(|_| "3".into())
+                .parse()
+                .unwrap_or(3),
         }
     }
 }
@@ -50,6 +69,7 @@ struct ChatRequest {
 
 #[derive(Debug, Deserialize, Clone)]
 struct Message {
+    #[allow(dead_code)]
     role: String,
     content: MessageContent,
 }
@@ -83,6 +103,7 @@ enum ContentPart {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "image_url")]
+    #[allow(dead_code)]
     ImageUrl { image_url: serde_json::Value },
 }
 
@@ -103,7 +124,7 @@ const COMPLEX_KEYWORDS: &[&str] = &[
     "ci/cd", "pipeline", "docker", "kubernetes",
 ];
 
-fn classify_complexity(messages: &[Message]) -> (bool, String) {
+fn classify_complexity(messages: &[Message], threshold: u32) -> (bool, String) {
     let full_text: String = messages
         .iter()
         .map(|m| m.content.as_text())
@@ -177,46 +198,50 @@ fn classify_complexity(messages: &[Message]) -> (bool, String) {
         }
     }
 
-    let is_complex = score >= 3;
+    let is_complex = score >= threshold;
     let reason = if reasons.is_empty() {
         "simple".into()
     } else {
         reasons.join(", ")
     };
 
-    debug!(score, reason, is_complex, "Classification");
+    debug!(score, reason, threshold, is_complex, "Classification");
     (is_complex, reason)
 }
 
-// ── Proxy vers DeepSeek ────────────────────────────────────────────────
+// ── Proxy vers le provider upstream ────────────────────────────────────
 
 async fn forward_request(
     client: &Client,
-    config: &AppConfig,
+    model_config: &ModelConfig,
     body: serde_json::Value,
-    model: &str,
 ) -> anyhow::Result<Response> {
     let mut body = body;
-    body["model"] = serde_json::Value::String(model.to_string());
+    body["model"] = serde_json::Value::String(model_config.model.clone());
 
-    let url = format!("{}/v1/chat/completions", config.api_base);
+    let url = format!("{}/v1/chat/completions", model_config.api_base);
     let stream = body
         .get("stream")
         .and_then(|s| s.as_bool())
         .unwrap_or(false);
 
-    let resp = client
+    let mut req = client
         .post(&url)
-        .header("Authorization", format!("Bearer {}", config.api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
+        .header("Content-Type", "application/json");
+
+    if model_config.auth_header == "Bearer" {
+        req = req.header("Authorization", format!("Bearer {}", model_config.api_key));
+    } else {
+        req = req.header(&model_config.auth_header, &model_config.api_key);
+    }
+
+    let resp = req.json(&body).send().await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("DeepSeek error {}: {}", status.as_u16(), text);
+        warn!(status = status.as_u16(), body = %text, "Upstream error");
+        anyhow::bail!("Upstream error {}: {}", status.as_u16(), text);
     }
 
     if stream {
@@ -254,25 +279,26 @@ async fn chat_completions(
         }
     };
 
-    let (is_complex, reason) = classify_complexity(&req.messages);
-    let chosen_model = if is_complex {
-        &state.config.pro_model
+    let (is_complex, reason) = classify_complexity(&req.messages, state.config.complexity_threshold);
+    let chosen = if is_complex {
+        &state.config.pro
     } else {
-        &state.config.flash_model
+        &state.config.flash
     };
 
     info!(
-        model = chosen_model,
+        model = %chosen.model,
+        provider = %chosen.api_base,
         reason,
         stream = req.stream.unwrap_or(false),
         "→ Routage"
     );
 
-    match forward_request(&state.client, &state.config, body, chosen_model).await {
+    match forward_request(&state.client, chosen, body).await {
         Ok(mut response) => {
             response.headers_mut().insert(
                 "X-iziRouter-Model",
-                chosen_model.parse().unwrap(),
+                chosen.model.parse().unwrap(),
             );
             response
                 .headers_mut()
@@ -317,18 +343,12 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/chat/completions", post(chat_completions))
-        .with_state(state);
+        .with_state(Arc::clone(&state));
 
     let addr = format!("0.0.0.0:{}", port);
     info!("🚀 iziRouter démarré sur http://{}", addr);
-    info!(
-        "   FLASH_MODEL = {}",
-        std::env::var("FLASH_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into())
-    );
-    info!(
-        "   PRO_MODEL   = {}",
-        std::env::var("PRO_MODEL").unwrap_or_else(|_| "deepseek-v4-pro".into())
-    );
+    info!("   FLASH → {}  ({})", state.config.flash.model, state.config.flash.api_base);
+    info!("   PRO   → {}  ({})", state.config.pro.model, state.config.pro.api_base);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;

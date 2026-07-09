@@ -2,7 +2,7 @@
 name = "izi-router"
 version = "0.1.0"
 edition = "2021"
-description = "Mini routeur OpenAI-compatible — route automatiquement vers DeepSeek Flash ou Pro selon la complexité du prompt"
+description = "Mini routeur OpenAI-compatible — route automatiquement vers le modèle simple ou complexe selon le prompt. Multi-provider (DeepSeek, OpenAI, Groq, Anthropic, OpenRouter, etc.)"
 
 [dependencies]
 axum = "0.8"
