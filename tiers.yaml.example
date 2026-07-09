@@ -1,0 +1,101 @@
+# iziRouter — Configuration des tiers
+# Chaque tier route vers un modèle spécifique selon les mots-clés détectés.
+#
+# ${VARIABLE} sera remplacé par la valeur de la variable d'environnement.
+
+port: 8001
+
+tiers:
+  # ── Agriculture ──────────────────────────────────────────────
+  - model: "agrillm-v2"
+    api_base: "${AGRI_API_BASE:-https://api.agrillm.com/v1}"
+    api_key: "${AGRI_API_KEY}"
+    keywords:
+      - agriculture
+      - agronomie
+      - culture
+      - irrigation
+      - sol
+      - plante
+      - récolte
+      - ferme
+      - élevage
+      - vétérinaire
+      - pesticide
+      - engrais
+      - rendement
+      - serre
+      - bétail
+      - semence
+      - tracteur
+      - moisson
+      - prairie
+      - pâturage
+    weight: 10
+
+  # ── Recherche scientifique ───────────────────────────────────
+  - model: "deepseek-v4-pro"
+    api_base: "${RESEARCH_API_BASE:-https://api.deepseek.com/v1}"
+    api_key: "${RESEARCH_API_KEY:-${DEEPSEEK_API_KEY}}"
+    keywords:
+      - recherche
+      - scientifique
+      - papier
+      - étude
+      - article
+      - hypothèse
+      - protocole
+      - expérience
+      - publication
+      - peer-review
+      - méthodologie
+      - résultat
+      - analyse statistique
+      - labo
+      - laboratoire
+      - thèse
+      - doctorat
+      - biologie
+      - physique
+      - chimie
+      - mathématiques
+    weight: 10
+
+  # ── Code / Développement ─────────────────────────────────────
+  - model: "deepseek-v4-pro"
+    api_base: "${CODE_API_BASE:-https://api.deepseek.com/v1}"
+    api_key: "${CODE_API_KEY:-${DEEPSEEK_API_KEY}}"
+    keywords:
+      - code
+      - programmer
+      - debug
+      - fonction
+      - algorithme
+      - compiler
+      - déployer
+      - API
+      - database
+      - SQL
+      - Rust
+      - Python
+      - JavaScript
+      - Docker
+      - Kubernetes
+      - refactor
+      - architecture
+      - design pattern
+      - test unitaire
+      - CI/CD
+      - GitHub
+      - pull request
+      - commit
+      - branche
+      - merge
+    weight: 5
+
+  # ── Général (fallback) ───────────────────────────────────────
+  - model: "deepseek-v4-flash"
+    api_base: "${DEEPSEEK_API_BASE:-https://api.deepseek.com/v1}"
+    api_key: "${DEEPSEEK_API_KEY}"
+    keywords: []        # pas de mots-clés → toujours en fallback
+    default: true

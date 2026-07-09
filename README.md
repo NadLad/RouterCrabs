@@ -1,158 +1,44 @@
-# iziRouter
+# iziRouter 🧭
 
-**Mini proxy OpenAI-compatible qui route automatiquement vers le modèle le plus approprié selon la complexité du prompt.**
+Mini routeur OpenAI-compatible qui choisit automatiquement le bon modèle selon **le domaine détecté** dans ton prompt.
 
-Un prompt simple (`« Bonjour »`) → modèle léger et économique.  
-Un prompt complexe (`« Débug ce race condition dans mon code Rust »`) → modèle puissant.
+- 🏷️ **Routage par mots-clés** — définis N tiers, chaque tier a ses mots-clés
+- 🔌 **Multi-provider** — chaque tier peut pointer vers un fournisseur différent (DeepSeek, OpenAI, Groq, Anthropic, OpenRouter, AgriLLM...)
+- ⚡ **Zéro latence** — classification locale, substring match, <1ms
+- 📦 **Un seul binaire** — ~4 Mo, pas de Docker, pas de base de données
+- 🎯 **Streaming SSE** natif
 
-Le tout est transparent pour le client (OpenCrabs, ChatGPT CLI, n'importe quel client OpenAI-compatible) — il ne voit qu'un seul endpoint.
-
-## Architecture
-
+```mermaid
+flowchart LR
+    A[OpenCrabs] --> B[iziRouter :8001]
+    B -->|"agriculture, sol, récolte"| C[AgriLLM]
+    B -->|"recherche, papier, étude"| D[DeepSeek Pro]
+    B -->|"code, Rust, debug"| E[DeepSeek Pro]
+    B -->|"bonjour, météo"| F[DeepSeek Flash]
 ```
-Client (OpenCrabs) ──→ iziRouter (localhost:8001)
-                           │
-                     ┌─────┴──────┐
-                     ▼             ▼
-                 FLASH           PRO
-              (modèle cheap)  (modèle puissant)
-```
 
-## Installation
+---
+
+## Démarrage rapide
 
 ```bash
-git clone https://github.com/NadLad/iziRouter.git
+# 1. Cloner
+git clone https://github.com/NadLad/iziRouter
 cd iziRouter
+
+# 2. Configurer les tiers
+cp tiers.yaml.example tiers.yaml
+# Édite tiers.yaml → adapte les modèles et mots-clés
+
+# 3. Clés API
 cp .env.example .env
-# Édite .env avec tes clés API et modèles
-cargo build --release
-./target/release/izi-router
+# Édite .env → mets tes clés API
+
+# 4. Lancer
+cargo run --release
 ```
 
-Prérequis : Rust 1.80+, ~4 Mo de RAM, zéro GPU.
-
-## Variables d'environnement
-
-| Variable | Obligatoire | Défaut | Description |
-|---|---|---|---|
-| `FLASH_API_KEY` | ✅ | — | Clé API pour le tier FLASH |
-| `FLASH_API_BASE` | ✅ | — | Base URL de l'API FLASH |
-| `FLASH_MODEL` | ✅ | — | Nom du modèle FLASH |
-| `FLASH_AUTH_HEADER` | ❌ | `Bearer` | Header d'authentification (voir section dédiée) |
-| `PRO_API_KEY` | ✅ | — | Clé API pour le tier PRO |
-| `PRO_API_BASE` | ✅ | — | Base URL de l'API PRO |
-| `PRO_MODEL` | ✅ | — | Nom du modèle PRO |
-| `PRO_AUTH_HEADER` | ❌ | `Bearer` | Header d'authentification (voir section dédiée) |
-| `PORT` | ❌ | `8001` | Port d'écoute |
-| `COMPLEXITY_THRESHOLD` | ❌ | `3` | Score seuil pour basculer vers PRO (1–10) |
-| `RUST_LOG` | ❌ | `info,izi_router=debug` | Niveau de log (tracing) |
-
-## Header d'authentification
-
-Par défaut, iziRouter envoie `Authorization: Bearer <clé>`, le standard OpenAI/DeepSeek/Groq/Mistral/OpenRouter/Together.
-
-Pour les APIs qui utilisent un autre header (ex: Anthropic utilise `x-api-key`), définis `FLASH_AUTH_HEADER` / `PRO_AUTH_HEADER` :
-
-```env
-# Anthropic natif
-FLASH_AUTH_HEADER=x-api-key
-PRO_AUTH_HEADER=x-api-key
-```
-
-| Comportement | Valeur |
-|---|---|
-| `Authorization: Bearer <key>` | `Bearer` (défaut) |
-| `x-api-key: <key>` | `x-api-key` (Anthropic natif) |
-| `X-Goog-Api-Key: <key>` | `X-Goog-Api-Key` (Gemini) |
-| Header personnalisé | N'importe quelle chaîne |
-
-## Seuil de complexité
-
-`COMPLEXITY_THRESHOLD` contrôle à quel point iziRouter est *gourmand* :
-
-| Valeur | Comportement |
-|---|---|
-| `1` | Presque tout part vers PRO (ultra-prudent) |
-| `3` | Équilibré **(défaut)** |
-| `6` | Seuls les prompts très complexes vont vers PRO |
-| `10` | Presque tout reste sur FLASH (ultra-économe) |
-
-## Règles de classification
-
-Le classifieur score chaque prompt sur 5 règles et additionne :
-
-| Règle | +1 | +2 | +3 | +5 |
-|---|---|---|---|---|
-| Longueur | >300 car. | >800 car. | >2000 car. | — |
-| Code | — | ≥1 marqueur | ≥3 marqueurs | — |
-| Mots-clés tech | 1 trouvé | 2–3 trouvés | ≥4 trouvés | — |
-| Image | — | — | — | image détectée |
-| Question ouverte | `?` + mot-clé | — | — | — |
-
-Score ≥ seuil → PRO, sinon → FLASH.
-
-## Exemples de configuration
-
-### DeepSeek (Flash + Pro)
-
-```env
-FLASH_API_KEY=sk-votre-cle
-FLASH_API_BASE=https://api.deepseek.com
-FLASH_MODEL=deepseek-v4-flash
-PRO_API_KEY=sk-votre-cle
-PRO_API_BASE=https://api.deepseek.com
-PRO_MODEL=deepseek-v4-pro
-```
-
-### OpenAI (GPT-4o-mini + GPT-4o)
-
-```env
-FLASH_API_KEY=sk-votre-cle
-FLASH_API_BASE=https://api.openai.com
-FLASH_MODEL=gpt-4o-mini
-PRO_API_KEY=sk-votre-cle
-PRO_API_BASE=https://api.openai.com
-PRO_MODEL=gpt-4o
-```
-
-### Groq (Llama 8B + 70B)
-
-```env
-FLASH_API_KEY=gsk_votre-cle
-FLASH_API_BASE=https://api.groq.com/openai
-FLASH_MODEL=llama-3.1-8b-instant
-PRO_API_KEY=gsk_votre-cle
-PRO_API_BASE=https://api.groq.com/openai
-PRO_MODEL=llama-3.3-70b-versatile
-```
-
-### Mixte : Flash chez DeepSeek, Pro chez Anthropic
-
-```env
-FLASH_API_KEY=sk-votre-cle-deepseek
-FLASH_API_BASE=https://api.deepseek.com
-FLASH_MODEL=deepseek-v4-flash
-
-PRO_API_KEY=sk-ant-votre-cle
-PRO_API_BASE=https://api.anthropic.com
-PRO_MODEL=claude-sonnet-4-6-20251101
-PRO_AUTH_HEADER=x-api-key
-```
-
-### OpenRouter (tout via un seul provider)
-
-```env
-FLASH_API_KEY=sk-or-v1-votre-cle
-FLASH_API_BASE=https://openrouter.ai/api
-FLASH_MODEL=deepseek/deepseek-v4-flash
-PRO_API_KEY=sk-or-v1-votre-cle
-PRO_API_BASE=https://openrouter.ai/api
-PRO_MODEL=anthropic/claude-sonnet-4.6
-```
-
-## Utilisation avec OpenCrabs
-
-Dans `~/.opencrabs/config.toml` :
+Ensuite dans OpenCrabs (`~/.opencrabs/config.toml`) :
 
 ```toml
 [providers.custom.deepseek]
@@ -161,26 +47,108 @@ api_key = "not-needed"
 default_model = "izi-router"
 ```
 
-OpenCrabs parle à iziRouter, iziRouter choisit le bon modèle. Rien d'autre à configurer.
+---
+
+## Configuration — `tiers.yaml`
+
+```yaml
+port: 8001
+
+tiers:
+  - model: "agrillm-v2"
+    api_base: "https://api.agrillm.com/v1"
+    api_key: "${AGRI_API_KEY}"          # interpolé depuis .env
+    keywords:                           # mots-clés pour ce tier
+      - agriculture
+      - agronomie
+      - sol
+      - récolte
+    weight: 10                          # priorité (défaut: 1)
+
+  - model: "deepseek-v4-flash"
+    api_base: "https://api.deepseek.com/v1"
+    api_key: "${DEEPSEEK_API_KEY}"
+    keywords: []                        # vide + default → fallback
+    default: true
+```
+
+### Champs par tier
+
+| Champ | Requis | Défaut | Description |
+|-------|--------|--------|-------------|
+| `model` | ✅ | — | Nom du modèle à appeler |
+| `api_base` | ✅ | — | URL de base de l'API |
+| `api_key` | ✅ | — | Clé API (`${VAR}` = variable d'environnement) |
+| `auth_header` | ❌ | `Bearer` | Header d'auth (`x-api-key` pour Anthropic natif) |
+| `keywords` | ❌ | `[]` | Mots-clés déclencheurs (minuscules, substring match) |
+| `weight` | ❌ | `1` | Poids en cas d'égalité (plus élevé = prioritaire) |
+| `default` | ❌ | `false` | Tier fallback si aucun mot-clé ne matche |
+
+---
+
+## Algorithme de routage
+
+Pour chaque requête entrante :
+
+1. Le texte complet de tous les messages est concaténé et mis en minuscules
+2. Pour chaque tier avec des mots-clés, on compte combien de mots-clés apparaissent dans le texte
+3. **Score = nombre de matchs × poids du tier**
+4. Le tier avec le **score le plus élevé** est sélectionné
+5. En cas d'égalité : poids le plus élevé → `default: true`
+6. Si **aucun mot-clé** ne matche → tier avec `default: true`
+
+### Exemple
+
+```
+Prompt : « Compare les rendements du blé et du maïs en agriculture biologique »
+→ "agriculture" matché dans tier "agri" → score = 1 × 10 = 10
+→ Aucun autre tier ne matche
+→ Routage vers AgriLLM ✅
+```
+
+```
+Prompt : « Écris une fonction Rust qui trie un vecteur »
+→ "Rust" matché dans tier "code" → score = 1 × 5 = 5
+→ Routage vers DeepSeek Pro ✅
+```
+
+```
+Prompt : « Bonjour, comment ça va ? »
+→ Aucun mot-clé matché
+→ Routage vers le tier default (DeepSeek Flash) ✅
+```
+
+---
 
 ## Debug
 
-Chaque réponse inclut deux headers :
+Chaque réponse inclut des headers pour tracer le routage :
 
-| Header | Contenu |
-|---|---|
-| `X-iziRouter-Model` | Modèle choisi (ex: `deepseek-v4-flash`) |
-| `X-iziRouter-Reason` | Raison (ex: `long, contient du code`) |
+```
+X-iziRouter-Tier:   agri
+X-iziRouter-Model:  agrillm-v2
+X-iziRouter-Reason: agri (matches: [agriculture, biologique], score: 20)
+```
+
+Pour voir les scores en détail :
 
 ```bash
-curl -s -D - http://localhost:8001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"messages":[{"role":"user","content":"Bonjour"}]}' \
-  | grep X-iziRouter
-# → X-iziRouter-Model: deepseek-v4-flash
-# → X-iziRouter-Reason: simple
+RUST_LOG=debug cargo run --release
 ```
+
+---
+
+## Variables d'environnement
+
+| Variable | Défaut | Description |
+|----------|--------|-------------|
+| `TIERS_CONFIG` | `tiers.yaml` | Chemin vers le fichier de config YAML |
+| `PORT` | `8001` | Port d'écoute |
+| `RUST_LOG` | `info,izi_router=debug` | Niveau de log |
+| `*_API_KEY` | — | Clés API (référencées dans `tiers.yaml` via `${VAR}`) |
+
+---
 
 ## Licence
 
-MIT — fais-en ce que tu veux.
+MIT

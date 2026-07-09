@@ -11,51 +11,113 @@ use std::sync::Arc;
 use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
 
-// ── Config ──────────────────────────────────────────────────────────────
+// ── Config YAML ─────────────────────────────────────────────────────────
 
-struct ModelConfig {
-    api_key: String,
-    api_base: String,
+#[derive(Debug, Deserialize, Clone)]
+struct RawTier {
     model: String,
+    api_base: String,
+    api_key: String,
+    #[serde(default = "default_auth_header")]
     auth_header: String,
+    #[serde(default)]
+    keywords: Vec<String>,
+    #[serde(default = "default_weight")]
+    weight: u32,
+    #[serde(default)]
+    default: bool,
 }
 
-struct AppConfig {
-    flash: ModelConfig,
-    pro: ModelConfig,
+fn default_auth_header() -> String { "Bearer".into() }
+fn default_weight() -> u32 { 1 }
+
+#[derive(Debug, Deserialize)]
+struct RawConfig {
+    #[serde(default = "default_port")]
     port: u16,
-    complexity_threshold: u32,
+    tiers: Vec<RawTier>,
 }
 
-impl ModelConfig {
-    fn from_env(prefix: &str) -> Self {
+fn default_port() -> u16 { 8001 }
+
+// ── Tier résolu (env vars interpolés) ──────────────────────────────────
+
+#[derive(Debug, Clone)]
+struct Tier {
+    name: String,
+    model: String,
+    api_base: String,
+    api_key: String,
+    auth_header: String,
+    keywords: Vec<String>,
+    weight: u32,
+    default: bool,
+}
+
+impl Tier {
+    fn from_raw(raw: RawTier, name: String) -> Self {
         Self {
-            api_key: std::env::var(format!("{}_API_KEY", prefix))
-                .unwrap_or_else(|_| panic!("{}_API_KEY doit être défini", prefix)),
-            api_base: std::env::var(format!("{}_API_BASE", prefix))
-                .unwrap_or_else(|_| panic!("{}_API_BASE doit être défini", prefix)),
-            model: std::env::var(format!("{}_MODEL", prefix))
-                .unwrap_or_else(|_| panic!("{}_MODEL doit être défini", prefix)),
-            auth_header: std::env::var(format!("{}_AUTH_HEADER", prefix))
-                .unwrap_or_else(|_| "Bearer".into()),
+            name,
+            model: raw.model,
+            api_base: interpolate_env(&raw.api_base),
+            api_key: interpolate_env(&raw.api_key),
+            auth_header: raw.auth_header,
+            keywords: raw.keywords,
+            weight: raw.weight,
+            default: raw.default,
         }
     }
 }
 
-impl AppConfig {
-    fn from_env() -> Self {
-        Self {
-            flash: ModelConfig::from_env("FLASH"),
-            pro: ModelConfig::from_env("PRO"),
-            port: std::env::var("PORT")
-                .unwrap_or_else(|_| "8001".into())
-                .parse()
-                .expect("PORT invalide"),
-            complexity_threshold: std::env::var("COMPLEXITY_THRESHOLD")
-                .unwrap_or_else(|_| "3".into())
-                .parse()
-                .unwrap_or(3),
+fn interpolate_env(s: &str) -> String {
+    let mut result = s.to_string();
+    let mut start = 0;
+    while let Some(begin) = result[start..].find("${") {
+        let abs_begin = start + begin;
+        if let Some(end) = result[abs_begin..].find('}') {
+            let abs_end = abs_begin + end;
+            let var_name = &result[abs_begin + 2..abs_end];
+            let value = std::env::var(var_name).unwrap_or_default();
+            result.replace_range(abs_begin..=abs_end, &value);
+            start = abs_begin + value.len();
+        } else {
+            break;
         }
+    }
+    result
+}
+
+#[derive(Debug)]
+struct AppConfig {
+    port: u16,
+    tiers: Vec<Tier>,
+}
+
+impl AppConfig {
+    fn load(path: &str) -> anyhow::Result<Self> {
+        let yaml = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("Impossible de lire {}: {}", path, e))?;
+
+        let raw: RawConfig = serde_yaml::from_str(&yaml)
+            .map_err(|e| anyhow::anyhow!("YAML invalide dans {}: {}", path, e))?;
+
+        if raw.tiers.is_empty() {
+            anyhow::bail!("Aucun tier défini dans {}", path);
+        }
+
+        let tier_names = raw.tiers.iter().map(|t| t.model.clone()).collect::<Vec<_>>();
+        let tiers: Vec<Tier> = raw.tiers
+            .into_iter()
+            .zip(tier_names)
+            .map(|(raw, name)| Tier::from_raw(raw, name))
+            .collect();
+
+        let has_default = tiers.iter().any(|t| t.default);
+        if !has_default {
+            anyhow::bail!("Aucun tier avec `default: true` dans {}", path);
+        }
+
+        Ok(Self { port: raw.port, tiers })
     }
 }
 
@@ -107,119 +169,94 @@ enum ContentPart {
     ImageUrl { image_url: serde_json::Value },
 }
 
-// ── Classifieur de complexité ──────────────────────────────────────────
+// ── Sélection du tier ──────────────────────────────────────────────────
+//
+// Pour chaque tier, on compte combien de ses mots-clés apparaissent
+// dans le prompt (insensible à la casse, substring match).
+// Score = nombre_de_matchs × poids_du_tier.
+// On choisit le tier au score le plus élevé.
+// En cas d'égalité : poids le plus élevé, puis `default: true`.
 
-const COMPLEX_KEYWORDS: &[&str] = &[
-    "explique", "explain", "pourquoi", "why",
-    "compare", "compare", "analyse", "analyze",
-    "architecture", "design pattern", "refactor",
-    "optimise", "optimize", "debug", "débug",
-    "implémente", "implement", "conçois", "concept",
-    "sécurité", "security", "performance",
-    "algorithme", "algorithm", "complexité", "complexity",
-    "migration", "base de données", "database",
-    "distribué", "distributed", "concurrent",
-    "async", "asynchrone", "multi-thread",
-    "memory leak", "race condition", "deadlock",
-    "ci/cd", "pipeline", "docker", "kubernetes",
-];
-
-fn classify_complexity(messages: &[Message], threshold: u32) -> (bool, String) {
+fn select_tier<'a>(tiers: &'a [Tier], messages: &[Message]) -> (&'a Tier, String) {
     let full_text: String = messages
         .iter()
         .map(|m| m.content.as_text())
         .collect::<Vec<_>>()
         .join(" ");
     let lower = full_text.to_lowercase();
-    let len = full_text.len();
 
-    let mut score: u32 = 0;
-    let mut reasons: Vec<&str> = Vec::new();
+    let mut best: Option<&Tier> = None;
+    let mut best_score: u32 = 0;
+    let mut best_matches: Vec<String> = vec![];
 
-    // Règle 1: longueur
-    if len > 2000 {
-        score += 3;
-        reasons.push("très long");
-    } else if len > 800 {
-        score += 2;
-        reasons.push("long");
-    } else if len > 300 {
-        score += 1;
-        reasons.push("moyen");
-    }
+    for tier in tiers {
+        if tier.keywords.is_empty() {
+            continue; // tier sans mots-clés → fallback, pas scoré
+        }
 
-    // Règle 2: présence de code
-    let code_markers = [
-        "```", "fn ", "def ", "class ", "import ", "pub fn", "impl ",
-        "struct ", "trait ", "use ", "mod ", "package ", "require(",
-        "from ", "<?php", "#!/", "SELECT ", "INSERT ",
-    ];
-    let code_count = code_markers.iter().filter(|m| full_text.contains(*m)).count();
-    if code_count >= 3 {
-        score += 3;
-        reasons.push("code dense");
-    } else if code_count >= 1 {
-        score += 2;
-        reasons.push("contient du code");
-    }
+        let matched: Vec<&String> = tier.keywords
+            .iter()
+            .filter(|kw| lower.contains(&kw.to_lowercase()))
+            .collect();
 
-    // Règle 3: mots-clés de complexité
-    let kw_count = COMPLEX_KEYWORDS.iter().filter(|kw| lower.contains(*kw)).count();
-    if kw_count >= 4 {
-        score += 3;
-        reasons.push("très technique");
-    } else if kw_count >= 2 {
-        score += 2;
-        reasons.push("technique");
-    } else if kw_count >= 1 {
-        score += 1;
-    }
+        let match_count = matched.len() as u32;
+        if match_count == 0 {
+            continue;
+        }
 
-    // Règle 4: image → toujours Pro (VL)
-    let has_image = messages.iter().any(|m| {
-        matches!(&m.content, MessageContent::MultiPart(parts) if parts.iter().any(|p| matches!(p, ContentPart::ImageUrl { .. })))
-    });
-    if has_image {
-        score += 5;
-        reasons.push("contient une image");
-    }
+        let score = match_count * tier.weight;
 
-    // Règle 5: question ouverte en fin de prompt ?
-    if let Some(last) = messages.last() {
-        let txt = last.content.as_text();
-        if txt.contains('?')
-            && (txt.contains("quoi")
-                || txt.contains("comment")
-                || txt.contains("pourquoi")
-                || txt.contains("how")
-                || txt.contains("why"))
-        {
-            score += 1;
+        debug!(
+            tier = %tier.name,
+            matches = ?matched.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            match_count,
+            weight = tier.weight,
+            score,
+            "Score tier"
+        );
+
+        let is_better = match best {
+            None => true,
+            Some(_b) if score > best_score => true,
+            Some(_b) if score == best_score && tier.weight > _b.weight => true,
+            Some(_b) if score == best_score && tier.weight == _b.weight && tier.default => true,
+            _ => false,
+        };
+
+        if is_better {
+            best = Some(tier);
+            best_score = score;
+            best_matches = matched.iter().map(|s| s.to_string()).collect();
         }
     }
 
-    let is_complex = score >= threshold;
-    let reason = if reasons.is_empty() {
-        "simple".into()
-    } else {
-        reasons.join(", ")
-    };
+    // Si aucun tier n'a matché, prendre le tier par défaut
+    if best.is_none() {
+        let default = tiers.iter().find(|t| t.default).expect("default tier requis");
+        return (default, "default (aucun mot-clé matché)".into());
+    }
 
-    debug!(score, reason, threshold, is_complex, "Classification");
-    (is_complex, reason)
+    let reason = format!(
+        "{} (matches: [{}], score: {})",
+        best.unwrap().name,
+        best_matches.join(", "),
+        best_score,
+    );
+
+    (best.unwrap(), reason)
 }
 
 // ── Proxy vers le provider upstream ────────────────────────────────────
 
 async fn forward_request(
     client: &Client,
-    model_config: &ModelConfig,
+    tier: &Tier,
     body: serde_json::Value,
 ) -> anyhow::Result<Response> {
     let mut body = body;
-    body["model"] = serde_json::Value::String(model_config.model.clone());
+    body["model"] = serde_json::Value::String(tier.model.clone());
 
-    let url = format!("{}/v1/chat/completions", model_config.api_base);
+    let url = format!("{}/v1/chat/completions", tier.api_base);
     let stream = body
         .get("stream")
         .and_then(|s| s.as_bool())
@@ -229,10 +266,10 @@ async fn forward_request(
         .post(&url)
         .header("Content-Type", "application/json");
 
-    if model_config.auth_header == "Bearer" {
-        req = req.header("Authorization", format!("Bearer {}", model_config.api_key));
+    if tier.auth_header == "Bearer" {
+        req = req.header("Authorization", format!("Bearer {}", tier.api_key));
     } else {
-        req = req.header(&model_config.auth_header, &model_config.api_key);
+        req = req.header(&tier.auth_header, &tier.api_key);
     }
 
     let resp = req.json(&body).send().await?;
@@ -279,26 +316,26 @@ async fn chat_completions(
         }
     };
 
-    let (is_complex, reason) = classify_complexity(&req.messages, state.config.complexity_threshold);
-    let chosen = if is_complex {
-        &state.config.pro
-    } else {
-        &state.config.flash
-    };
+    let (tier, reason) = select_tier(&state.config.tiers, &req.messages);
 
     info!(
-        model = %chosen.model,
-        provider = %chosen.api_base,
+        tier = %tier.name,
+        model = %tier.model,
+        provider = %tier.api_base,
         reason,
         stream = req.stream.unwrap_or(false),
         "→ Routage"
     );
 
-    match forward_request(&state.client, chosen, body).await {
+    match forward_request(&state.client, tier, body).await {
         Ok(mut response) => {
             response.headers_mut().insert(
+                "X-iziRouter-Tier",
+                tier.name.parse().unwrap(),
+            );
+            response.headers_mut().insert(
                 "X-iziRouter-Model",
-                chosen.model.parse().unwrap(),
+                tier.model.parse().unwrap(),
             );
             response
                 .headers_mut()
@@ -331,7 +368,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config = AppConfig::from_env();
+    let config_path = std::env::var("TIERS_CONFIG")
+        .unwrap_or_else(|_| "tiers.yaml".into());
+
+    let config = AppConfig::load(&config_path)?;
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(120))
@@ -347,8 +387,16 @@ async fn main() -> anyhow::Result<()> {
 
     let addr = format!("0.0.0.0:{}", port);
     info!("🚀 iziRouter démarré sur http://{}", addr);
-    info!("   FLASH → {}  ({})", state.config.flash.model, state.config.flash.api_base);
-    info!("   PRO   → {}  ({})", state.config.pro.model, state.config.pro.api_base);
+    info!("   Config: {}", config_path);
+    info!("   Tiers chargés:");
+    for tier in &state.config.tiers {
+        let badge = if tier.default { " 🏠" } else { "" };
+        let kw_count = tier.keywords.len();
+        info!(
+            "     {:<20} → {:30}  [{} mots-clés, poids={}]{}",
+            tier.name, tier.model, kw_count, tier.weight, badge
+        );
+    }
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
