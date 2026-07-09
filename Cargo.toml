@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/NadLad/RouterCrabs"
 documentation = "https://github.com/NadLad/RouterCrabs#readme"
 readme = "README.md"
-keywords = ["llm", "router", "proxy", "deepseek", "openai", "ai", "routing"]
+keywords = ["llm", "router", "proxy", "deepseek", "openai"]
 categories = ["development-tools", "web-programming::http-server"]
 
 [dependencies]
