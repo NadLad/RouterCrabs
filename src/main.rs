@@ -316,7 +316,7 @@ async fn forward_request(
 // ── Handlers ───────────────────────────────────────────────────────────
 
 async fn health() -> &'static str {
-    "OK — iziRouter"
+    "OK — RouterCrabs"
 }
 
 async fn list_models(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -328,7 +328,7 @@ async fn list_models(State(state): State<Arc<AppState>>) -> Json<serde_json::Val
             serde_json::json!({
                 "id": t.model,
                 "object": "model",
-                "owned_by": "izi-router",
+                "owned_by": "router-crabs",
             })
         })
         .collect();
@@ -367,16 +367,16 @@ async fn chat_completions(
     match forward_request(&state.client, tier, body).await {
         Ok(mut response) => {
             response.headers_mut().insert(
-                "X-iziRouter-Tier",
+                "X-RouterCrabs-Tier",
                 tier.name.parse().unwrap(),
             );
             response.headers_mut().insert(
-                "X-iziRouter-Model",
+                "X-RouterCrabs-Model",
                 tier.model.parse().unwrap(),
             );
             response
                 .headers_mut()
-                .insert("X-iziRouter-Reason", reason.parse().unwrap());
+                .insert("X-RouterCrabs-Reason", reason.parse().unwrap());
             response
         }
         Err(e) => {
@@ -401,7 +401,7 @@ struct AppState {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info,izi_router=debug".into()),
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info,router_crabs=debug".into()),
         )
         .init();
 
@@ -424,7 +424,7 @@ async fn main() -> anyhow::Result<()> {
         .with_state(Arc::clone(&state));
 
     let addr = format!("0.0.0.0:{}", port);
-    info!("🚀 iziRouter démarré sur http://{}", addr);
+    info!("🚀 RouterCrabs démarré sur http://{}", addr);
     info!("   Config: {}", config_path);
     info!("   Tiers chargés:");
     for tier in &state.config.tiers {

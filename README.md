@@ -1,4 +1,4 @@
-# iziRouter 🧭
+# RouterCrabs 🧭
 
 Mini routeur OpenAI-compatible qui choisit automatiquement le bon modèle selon **le domaine détecté** dans ton prompt.
 
@@ -10,7 +10,7 @@ Mini routeur OpenAI-compatible qui choisit automatiquement le bon modèle selon 
 
 ```mermaid
 flowchart LR
-    A[OpenCrabs] --> B[iziRouter :8001]
+    A[OpenCrabs] --> B[RouterCrabs :8001]
     B -->|"agriculture, sol, récolte"| C[AgriLLM]
     B -->|"recherche, papier, étude"| D[DeepSeek Pro]
     B -->|"code, Rust, debug"| E[DeepSeek Pro]
@@ -23,8 +23,8 @@ flowchart LR
 
 ```bash
 # 1. Cloner
-git clone https://github.com/NadLad/iziRouter
-cd iziRouter
+git clone https://github.com/NadLad/RouterCrabs
+cd RouterCrabs
 
 # 2. Configurer les tiers
 cp tiers.yaml.example tiers.yaml
@@ -44,7 +44,7 @@ Ensuite dans OpenCrabs (`~/.opencrabs/config.toml`) :
 [providers.custom.deepseek]
 base_url = "http://localhost:8001/v1"
 api_key = "not-needed"
-default_model = "izi-router"
+default_model = "router-crabs"
 ```
 
 ---
@@ -125,9 +125,9 @@ Prompt : « Bonjour, comment ça va ? »
 Chaque réponse inclut des headers pour tracer le routage :
 
 ```
-X-iziRouter-Tier:   agri
-X-iziRouter-Model:  agrillm-v2
-X-iziRouter-Reason: agri (matches: [agriculture, biologique], score: 20)
+X-RouterCrabs-Tier:   agri
+X-RouterCrabs-Model:  agrillm-v2
+X-RouterCrabs-Reason: agri (matches: [agriculture, biologique], score: 20)
 ```
 
 Pour voir les scores en détail :
@@ -144,7 +144,7 @@ RUST_LOG=debug cargo run --release
 |----------|--------|-------------|
 | `TIERS_CONFIG` | `tiers.yaml` | Chemin vers le fichier de config YAML |
 | `PORT` | `8001` | Port d'écoute |
-| `RUST_LOG` | `info,izi_router=debug` | Niveau de log |
+| `RUST_LOG` | `info,router_crabs=debug` | Niveau de log |
 | `*_API_KEY` | — | Clés API (référencées dans `tiers.yaml` via `${VAR}`) |
 
 ---

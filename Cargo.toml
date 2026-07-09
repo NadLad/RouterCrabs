@@ -1,8 +1,8 @@
 [package]
-name = "izi-router"
+name = "router-crabs"
 version = "0.1.0"
 edition = "2021"
-description = "Mini routeur OpenAI-compatible — route automatiquement vers le modèle simple ou complexe selon le prompt. Multi-provider (DeepSeek, OpenAI, Groq, Anthropic, OpenRouter, etc.)"
+description = "Routeur LLM multi-tiers — route automatiquement vers le bon modèle selon le domaine détecté. Multi-provider (DeepSeek, OpenAI, Groq, Anthropic, OpenRouter, etc.)"
 
 [dependencies]
 axum = "0.8"
