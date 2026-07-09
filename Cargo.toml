@@ -2,7 +2,13 @@
 name = "router-crabs"
 version = "0.1.0"
 edition = "2021"
-description = "Routeur LLM multi-tiers — route automatiquement vers le bon modèle selon le domaine détecté. Multi-provider (DeepSeek, OpenAI, Groq, Anthropic, OpenRouter, etc.)"
+description = "🧭 Routeur LLM multi-tiers — route automatiquement vers le bon modèle selon le domaine détecté. Multi-provider (DeepSeek, OpenAI, Groq, Anthropic, OpenRouter, Mistral…). Utilisable comme binaire standalone ou comme librairie Rust."
+license = "MIT"
+repository = "https://github.com/NadLad/RouterCrabs"
+documentation = "https://github.com/NadLad/RouterCrabs#readme"
+readme = "README.md"
+keywords = ["llm", "router", "proxy", "deepseek", "openai", "ai", "routing"]
+categories = ["development-tools", "web-programming::http-server"]
 
 [dependencies]
 axum = "0.8"
