@@ -1,38 +1,38 @@
 # RouterCrabs 🧭
 
-Mini routeur OpenAI-compatible qui choisit automatiquement le bon modèle selon **le domaine** ou **la complexité** de ton prompt. Deux modes de routage, combinables :
+A lightweight OpenAI-compatible proxy that automatically picks the right model based on **domain** or **complexity** of your prompt. Two routing modes, combinable:
 
-- 🏷️ **Routage par domaine** — mots-clés → modèle spécialisé (agri → AgriLLM, code → Pro…)
-- 🧠 **Routage par complexité** — heuristiques locales → Flash (simple) ou Pro (complexe)
-- 🔌 **Multi-provider** — chaque tier peut pointer vers un fournisseur différent
-- ⚡ **Zéro latence** — classification locale, substring match + heuristiques, <1ms
-- 📦 **Un seul binaire** — ~4 Mo, pas de Docker, pas de base de données
-- 🎯 **Streaming SSE** natif
+- 🏷️ **Domain routing** — keywords → specialized model (agri → AgriLLM, code → Pro…)
+- 🧠 **Complexity routing** — local heuristics → Flash (simple) or Pro (complex)
+- 🔌 **Multi-provider** — each tier can point to a different provider
+- ⚡ **Zero latency** — local classification, substring match + heuristics, <1ms
+- 📦 **Single binary** — ~4 MB, no Docker, no database
+- 🎯 **Native SSE streaming**
 
 ```mermaid
 flowchart LR
     A[Prompt] --> B[RouterCrabs]
-    B -->|"agriculture, sol…"| C[AgriLLM]
+    B -->|"agriculture, soil…"| C[AgriLLM]
     B -->|"code, Rust, debug…"| D[Pro]
-    B -->|"aucun mot-clé + complexité faible"| E[Flash]
-    B -->|"aucun mot-clé + complexité élevée"| F[Pro]
+    B -->|"no keyword + low complexity"| E[Flash]
+    B -->|"no keyword + high complexity"| F[Pro]
 ```
 
 ---
 
-## Démarrage rapide
+## Quick Start
 
 ```bash
 git clone https://github.com/NadLad/RouterCrabs
 cd RouterCrabs
 cp tiers.yaml.example tiers.yaml
-# Édite tiers.yaml → décommente la section [fallback] + tes domaines
+# Edit tiers.yaml → uncomment the [fallback] section + your domains
 cp .env.example .env
-# Édite .env → mets tes clés API
+# Edit .env → add your API keys
 cargo run --release
 ```
 
-Puis dans OpenCrabs (`~/.opencrabs/config.toml`) :
+Then in OpenCrabs (`~/.opencrabs/config.toml`):
 
 ```toml
 [providers.custom.deepseek]
@@ -43,51 +43,51 @@ default_model = "router-crabs"
 
 ---
 
-## Comment ça marche
+## How It Works
 
-### 1. Routage par domaine (mots-clés)
+### 1. Domain Routing (keywords)
 
-Chaque tier définit une liste de mots-clés. RouterCrabs cherche ces mots-clés dans le prompt (substring, case-insensitive) et calcule un score :
-
-```
-Score = nombre de matchs × poids du tier
-```
-
-Le tier avec le meilleur score gagne. En cas d'égalité, le `weight` le plus élevé départage, puis `default: true`.
+Each tier defines a list of keywords. RouterCrabs scans the prompt for these keywords (substring, case-insensitive) and computes a score:
 
 ```
-« Compare les rendements du blé et du maïs en agriculture biologique »
-  → "agriculture" matché → tier agri → AgriLLM ✅
+Score = match_count × tier_weight
 ```
 
-### 2. Routage par complexité (fallback)
+The tier with the highest score wins. Ties are broken by `weight`, then `default: true`.
 
-Quand **aucun mot-clé de domaine** ne matche, RouterCrabs calcule un **score de complexité** (0–12) basé sur 5 heuristiques locales :
+```
+"Compare wheat and corn yields in organic agriculture"
+  → "agriculture" matched → agri tier → AgriLLM ✅
+```
 
-| Heuristique | Barème |
+### 2. Complexity Routing (fallback)
+
+When **no domain keywords** match, RouterCrabs computes a **complexity score** (0–12) based on 5 local heuristics:
+
+| Heuristic | Scoring |
 |---|---|
-| **Longueur du prompt** | >2000 chars : +3<br>>800 chars : +2<br>>300 chars : +1 |
-| **Présence de code** | ≥3 marqueurs (```, `fn`, `class`, `SELECT`…) : +3<br>≥1 : +2 |
-| **Mots-clés techniques** | ≥4 : +3 (explique, architecture, algorithme, compare…)<br>≥2 : +2<br>≥1 : +1 |
-| **Images** | +5 (toujours → Pro) |
-| **Question ouverte** | `?` + pourquoi/comment/how/why : +1 |
+| **Prompt length** | >2000 chars: +3<br>>800 chars: +2<br>>300 chars: +1 |
+| **Code presence** | ≥3 markers (```, `fn`, `class`, `SELECT`…): +3<br>≥1: +2 |
+| **Technical keywords** | ≥4: +3 (explain, architecture, algorithm, compare…)<br>≥2: +2<br>≥1: +1 |
+| **Images** | +5 (always → Pro) |
+| **Open-ended question** | `?` + why/how/what is/can you: +1 |
 
-Si le score ≥ `threshold` → modèle **complexe**. Sinon → modèle **simple**.
-
-```
-« Bonjour »            → score 0 < 3 → DeepSeek Flash ✅
-« Explique l'archi     → score 5 ≥ 3 → DeepSeek Pro   ✅
-  microservices, compare
-  les tradeoffs de perf »
-```
-
-### 3. Algorithme complet (hybride)
+If score ≥ `threshold` → **complex** model. Otherwise → **simple** model.
 
 ```
-1. Mots-clés de domaine → si match → tier spécialisé
-2. Sinon → score de complexité → ≥ seuil → modèle complexe
-                                 → < seuil → modèle simple
-3. Sinon (pas de section fallback) → tier default: true
+"Hello"               → score 0 < 3 → DeepSeek Flash ✅
+"Explain microservices → score 5 ≥ 3 → DeepSeek Pro   ✅
+ architecture, compare
+ performance tradeoffs"
+```
+
+### 3. Full Algorithm (hybrid)
+
+```
+1. Domain keywords → if match → specialized tier
+2. Otherwise → complexity score → ≥ threshold → complex model
+                                 → < threshold → simple model
+3. Otherwise (no fallback section) → tier with default: true
 ```
 
 ---
@@ -97,23 +97,23 @@ Si le score ≥ `threshold` → modèle **complexe**. Sinon → modèle **simple
 ```yaml
 port: 8001
 
-# ── Tiers par domaine (mots-clés) ──────────────────────────
+# ── Domain tiers (keywords) ──────────────────────────────
 tiers:
   - model: "agrillm-v2"
     api_base: "https://api.agrillm.com/v1"
     api_key: "${AGRI_API_KEY}"
-    keywords: [agriculture, agronomie, sol, plante, récolte, élevage]
+    keywords: [agriculture, agronomy, soil, plant, harvest, livestock]
     weight: 20
 
   - model: "deepseek-v4-pro"
     api_base: "https://api.deepseek.com"
     api_key: "${DEEPSEEK_API_KEY}"
-    keywords: [code, Rust, Python, API, database, SQL, Docker, déploiement]
+    keywords: [code, Rust, Python, API, database, SQL, Docker, deployment]
     weight: 10
 
-# ── Routage par complexité (fallback) ──────────────────────
+# ── Complexity routing (fallback) ──────────────────────
 fallback:
-  threshold: 3          # seuil de bascule simple → complexe
+  threshold: 3          # switch threshold: simple → complex
   simple:
     model: "deepseek-v4-flash"
     api_base: "https://api.deepseek.com"
@@ -124,43 +124,43 @@ fallback:
     api_key: "${DEEPSEEK_API_KEY}"
 ```
 
-### Champs par tier
+### Tier Fields
 
-| Champ | Requis | Défaut | Description |
+| Field | Required | Default | Description |
 |---|---|---|---|
-| `model` | ✅ | — | Modèle à appeler |
-| `api_base` | ✅ | — | URL de base de l'API |
-| `api_key` | ✅ | — | Clé (`${VAR}` = variable d'environnement) |
-| `auth_header` | ❌ | `Bearer` | Header d'auth (`x-api-key` pour Anthropic natif) |
-| `keywords` | ❌ | `[]` | Mots-clés (minuscules, substring match) |
-| `weight` | ❌ | `1` | Priorité en cas d'égalité |
-| `default` | ❌ | `false` | Fallback ultime si aucun mot-clé ni `fallback` |
+| `model` | ✅ | — | Model to call |
+| `api_base` | ✅ | — | API base URL |
+| `api_key` | ✅ | — | Key (`${VAR}` = environment variable) |
+| `auth_header` | ❌ | `Bearer` | Auth header (`x-api-key` for native Anthropic) |
+| `keywords` | ❌ | `[]` | Keywords (lowercase, substring match) |
+| `weight` | ❌ | `1` | Priority in case of a tie |
+| `default` | ❌ | `false` | Ultimate fallback if no keywords nor `fallback` |
 
-### Champs de la section `fallback`
+### Fallback Section Fields
 
-| Champ | Requis | Défaut | Description |
+| Field | Required | Default | Description |
 |---|---|---|---|
-| `threshold` | ❌ | `3` | Score de complexité minimum pour basculer vers `complex` |
-| `simple.model` | ✅ | — | Modèle pour les requêtes simples |
-| `simple.api_base` | ✅ | — | URL de base |
-| `simple.api_key` | ✅ | — | Clé API |
-| `complex.model` | ✅ | — | Modèle pour les requêtes complexes |
-| `complex.api_base` | ✅ | — | URL de base |
-| `complex.api_key` | ✅ | — | Clé API |
+| `threshold` | ❌ | `3` | Minimum complexity score to switch to `complex` |
+| `simple.model` | ✅ | — | Model for simple requests |
+| `simple.api_base` | ✅ | — | Base URL |
+| `simple.api_key` | ✅ | — | API key |
+| `complex.model` | ✅ | — | Model for complex requests |
+| `complex.api_base` | ✅ | — | Base URL |
+| `complex.api_key` | ✅ | — | API key |
 
 ---
 
 ## Debug
 
-Chaque réponse inclut des headers pour tracer le routage :
+Every response includes headers to trace routing:
 
 ```
 X-RouterCrabs-Tier:   complex-fallback
 X-RouterCrabs-Model:  deepseek-v4-pro
-X-RouterCrabs-Reason: complexité élevée (score: 5, seuil: 3)
+X-RouterCrabs-Reason: complexity: high (score: 5, threshold: 3)
 ```
 
-Pour voir les scores en détail :
+To see detailed scores:
 
 ```bash
 RUST_LOG=debug cargo run --release
@@ -168,18 +168,18 @@ RUST_LOG=debug cargo run --release
 
 ---
 
-## Variables d'environnement
+## Environment Variables
 
-| Variable | Défaut | Description |
+| Variable | Default | Description |
 |---|---|---|
-| `TIERS_CONFIG` | `tiers.yaml` | Chemin vers la config YAML |
-| `PORT` | `8001` | Port d'écoute |
-| `RUST_LOG` | `info,router_crabs=debug` | Niveau de log |
-| `*_API_KEY` | — | Clés API (référencées dans `tiers.yaml` via `${VAR}`) |
+| `TIERS_CONFIG` | `tiers.yaml` | Path to the YAML config |
+| `PORT` | `8001` | Listening port |
+| `RUST_LOG` | `info,router_crabs=debug` | Log level |
+| `*_API_KEY` | — | API keys (referenced in `tiers.yaml` via `${VAR}`) |
 
 ---
 
-## Utilisation comme librairie Rust
+## Usage as a Rust Library
 
 ```rust
 use router_crabs::{TiersConfig, Message, select_tier, score_complexity, forward_request};
@@ -191,6 +191,6 @@ let complexity = score_complexity(&messages);
 
 ---
 
-## Licence
+## License
 
 MIT

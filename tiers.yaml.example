@@ -1,46 +1,46 @@
-# RouterCrabs — exemple de configuration hybride
+# RouterCrabs — hybrid configuration example
 #
-# Phase 1 — Mots-clés de domaine : si des mots-clés matchent → tier du domaine
-# Phase 2 — Complexité : sinon, heuristiques de complexité → simple ou complex
+# Phase 1 — Domain keywords: if keywords match → domain tier
+# Phase 2 — Complexity: otherwise, complexity heuristics → simple or complex
 #
-# Heuristiques de complexité (score 0-12) :
-#   - Longueur du prompt (>300, >800, >2000 chars)       → +1, +2, +3
-#   - Présence de code (```, fn, class, SELECT…)          → +2, +3
-#   - Mots-clés techniques (explique, architecture…)       → +1, +2, +3
-#   - Images                                               → +5
-#   - Question ouverte (? + pourquoi/comment)               → +1
+# Complexity heuristics (score 0-12):
+#   - Prompt length (>300, >800, >2000 chars)          → +1, +2, +3
+#   - Code presence (```, fn, class, SELECT…)            → +2, +3
+#   - Technical keywords (explain, architecture…)         → +1, +2, +3
+#   - Images                                              → +5
+#   - Open-ended question (? + why/how)                    → +1
 
 port: 8001
 
-# ── Tiers par domaine (mots-clés) ──────────────────────────
-# Ajoute ici tes domaines métier. Les mots-clés sont en substring
-# case-insensitive. Le score = nombre_de_matchs × weight.
-# En cas d'égalité, le weight départage, puis default: true.
+# ── Domain tiers (keywords) ──────────────────────────
+# Add your business domains here. Keywords use case-insensitive
+# substring matching. Score = match_count × weight.
+# Ties are broken by weight, then default: true.
 tiers:
-  # Exemple : domaine agriculture
+  # Example: agriculture domain
   # - model: "agrillm-v2"
   #   api_base: "https://api.agrillm.com/v1"
   #   api_key: "${AGRI_API_KEY}"
-  #   keywords: [agriculture, agronomie, sol, plante, récolte, ferme, élevage]
+  #   keywords: [agriculture, agronomy, soil, plant, harvest, farm, livestock]
   #   weight: 20
 
-  # Exemple : domaine code
+  # Example: code domain
   # - model: "deepseek-v4-pro"
   #   api_base: "https://api.deepseek.com"
   #   api_key: "${DEEPSEEK_API_KEY}"
-  #   keywords: [code, Rust, Python, déploiement, API, database, SQL, Docker]
+  #   keywords: [code, Rust, Python, deployment, API, database, SQL, Docker]
   #   weight: 10
 
-  # Fallback ultime (si ni mots-clés ni complexité configurés)
+  # Ultimate fallback (if neither keywords nor complexity are configured)
   - model: "deepseek-v4-flash"
     api_base: "https://api.deepseek.com"
     api_key: "${DEEPSEEK_API_KEY}"
     keywords: []
     default: true
 
-# ── Routage par complexité (optionnel mais recommandé) ─────
-# S'active quand aucun mot-clé de domaine ne matche.
-# Décommente la section pour l'activer :
+# ── Complexity routing (optional but recommended) ─────
+# Activated when no domain keywords match.
+# Uncomment the section to enable it:
 #
 # fallback:
 #   threshold: 3

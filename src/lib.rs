@@ -1,25 +1,25 @@
 //! # RouterCrabs 🧭
 //!
-//! Un proxy intelligent qui route les requêtes LLM vers le modèle
-//! le plus adapté selon **deux critères** :
+//! An intelligent proxy that routes LLM requests to the most suitable
+//! model based on **two criteria**:
 //!
-//! 1. **Mots-clés de domaine** — ex: « agriculture » → AgriLLM, « code » → Pro
-//! 2. **Heuristiques de complexité** — prompt court et simple → Flash, long et technique → Pro
+//! 1. **Domain keywords** — e.g. "agriculture" → AgriLLM, "code" → Pro
+//! 2. **Complexity heuristics** — short & simple prompt → Flash, long & technical → Pro
 //!
-//! Chaque tier est défini dans un fichier YAML. Une section `fallback` optionnelle
-//! active le routage par complexité quand aucun mot-clé de domaine ne matche.
+//! Each tier is defined in a YAML file. An optional `fallback` section
+//! enables complexity-based routing when no domain keywords match.
 //!
-//! Supporte tous les providers OpenAI-compatibles : DeepSeek, OpenAI,
+//! Supports all OpenAI-compatible providers: DeepSeek, OpenAI,
 //! Groq, OpenRouter, Anthropic, Mistral, Together AI…
 //!
-//! ## Usage — Binaire
+//! ## Usage — Binary
 //!
 //! ```bash
 //! cargo install router-crabs
-//! router-crabs  # lit tiers.yaml dans le répertoire courant
+//! router-crabs  # reads tiers.yaml from the current directory
 //! ```
 //!
-//! ## Usage — Librairie
+//! ## Usage — Library
 //!
 //! ```rust,no_run
 //! use router_crabs::{TiersConfig, Message, MessageContent, select_tier};
@@ -28,31 +28,31 @@
 //! let config = TiersConfig::load("tiers.yaml")?;
 //! let messages = vec![
 //!     Message { role: "user".into(), content: Some(MessageContent::Text(
-//!         "Explique-moi l'architecture des microservices".into()
+//!         "Explain microservices architecture to me".into()
 //!     )) },
 //! ];
 //! let (tier, reason) = select_tier(&config, &messages);
-//! // Si fallback configuré : complexité → tier.model = "deepseek-v4-pro"
+//! // If fallback is configured: complexity → tier.model = "deepseek-v4-pro"
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! ## Format `tiers.yaml`
+//! ## `tiers.yaml` format
 //!
 //! ```yaml
 //! port: 8001
 //!
-//! # Tiers par domaine (optionnels)
+//! # Domain tiers (optional)
 //! tiers:
 //!   - model: "agrillm-v2"
 //!     api_base: "https://api.agrillm.com/v1"
 //!     api_key: "${AGRI_API_KEY}"
-//!     keywords: [agriculture, agronomie, sol, plante, récolte]
+//!     keywords: [agriculture, agronomy, soil, plant, harvest]
 //!     weight: 20
 //!
-//! # Routage par complexité (optionnel)
+//! # Complexity-based routing (optional)
 //! fallback:
-//!   threshold: 3          # seuil de complexité
+//!   threshold: 3          # complexity threshold
 //!   simple:
 //!     model: "deepseek-v4-flash"
 //!     api_base: "https://api.deepseek.com"
@@ -73,28 +73,28 @@ use axum::{
     Json,
 };
 
-// ── Configuration YAML ──────────────────────────────────────────────────
+// ── YAML Configuration ──────────────────────────────────────────────────
 
-/// Tier brut, désérialisé depuis le YAML.
-/// Contient encore les variables `${VAR}` non résolues.
+/// Raw tier, deserialized from YAML.
+/// Still contains unresolved `${VAR}` placeholders.
 #[derive(Debug, Deserialize, Clone)]
 pub struct RawTier {
-    /// Identifiant du modèle (ex: `"deepseek-v4-pro"`)
+    /// Model identifier (e.g. `"deepseek-v4-pro"`)
     pub model: String,
-    /// URL de base de l'API (ex: `"https://api.deepseek.com"`)
+    /// API base URL (e.g. `"https://api.deepseek.com"`)
     pub api_base: String,
-    /// Clé API (supporte `${VAR}` pour les variables d'environnement)
+    /// API key (supports `${VAR}` for environment variables)
     pub api_key: String,
-    /// Nom du header d'authentification (défaut: `"Bearer"`).
+    /// Authentication header name (default: `"Bearer"`).
     #[serde(default = "default_auth_header")]
     pub auth_header: String,
-    /// Liste des mots-clés pour scorer ce tier.
+    /// List of keywords used to score this tier.
     #[serde(default)]
     pub keywords: Vec<String>,
-    /// Poids multiplicatif du tier (défaut: 1).
+    /// Multiplicative weight for the tier (default: 1).
     #[serde(default = "default_weight")]
     pub weight: u32,
-    /// Tier utilisé quand aucun mot-clé ni complexité ne matche.
+    /// Tier used when no keywords match and no complexity fallback is active.
     #[serde(default)]
     pub default: bool,
 }
@@ -102,7 +102,7 @@ pub struct RawTier {
 fn default_auth_header() -> String { "Bearer".into() }
 fn default_weight() -> u32 { 1 }
 
-/// Configuration brute d'un tier de fallback.
+/// Raw fallback tier configuration.
 #[derive(Debug, Deserialize, Clone)]
 pub struct RawFallbackTier {
     pub model: String,
@@ -112,10 +112,10 @@ pub struct RawFallbackTier {
     pub auth_header: String,
 }
 
-/// Configuration brute du fallback par complexité.
+/// Raw complexity-based fallback configuration.
 #[derive(Debug, Deserialize, Clone)]
 pub struct RawFallbackConfig {
-    /// Seuil de complexité pour basculer vers le tier "complex" (défaut: 3)
+    /// Complexity threshold to switch to the "complex" tier (default: 3)
     #[serde(default = "default_complexity_threshold")]
     pub threshold: u32,
     pub simple: RawFallbackTier,
@@ -124,7 +124,7 @@ pub struct RawFallbackConfig {
 
 fn default_complexity_threshold() -> u32 { 3 }
 
-/// Configuration brute telle que lue dans le fichier YAML.
+/// Raw configuration as read from the YAML file.
 #[derive(Debug, Deserialize)]
 pub struct RawConfig {
     #[serde(default = "default_port")]
@@ -136,33 +136,33 @@ pub struct RawConfig {
 
 fn default_port() -> u16 { 8001 }
 
-// ── Tier résolu (variables d'environnement interpolées) ─────────────────
+// ── Resolved tier (environment variables interpolated) ───────────────────
 
-/// Un tier entièrement résolu — les `${VAR}` ont été remplacés
-/// par leurs valeurs depuis l'environnement.
+/// A fully resolved tier — `${VAR}` placeholders have been replaced
+/// with their values from the environment.
 #[derive(Debug, Clone)]
 pub struct Tier {
-    /// Nom du tier (dérivé du champ `model`)
+    /// Tier name (derived from the `model` field)
     pub name: String,
-    /// Identifiant du modèle
+    /// Model identifier
     pub model: String,
-    /// URL de base de l'API
+    /// API base URL
     pub api_base: String,
-    /// Clé API (résolue)
+    /// API key (resolved)
     pub api_key: String,
-    /// Header d'authentification
+    /// Authentication header
     pub auth_header: String,
-    /// Mots-clés de ce tier
+    /// Keywords for this tier
     pub keywords: Vec<String>,
-    /// Poids multiplicatif
+    /// Multiplicative weight
     pub weight: u32,
-    /// Tier par défaut ?
+    /// Is this the default tier?
     pub default: bool,
 }
 
 impl Tier {
-    /// Convertit un [`RawTier`] en [`Tier`] en résolvant les variables
-    /// d'environnement dans `api_base` et `api_key`.
+    /// Converts a [`RawTier`] into a [`Tier`] by resolving environment
+    /// variables in `api_base` and `api_key`.
     pub fn from_raw(raw: RawTier, name: String) -> Self {
         Self {
             name,
@@ -177,7 +177,7 @@ impl Tier {
     }
 }
 
-/// Un tier de fallback résolu (utilisé pour le routage par complexité).
+/// A resolved fallback tier (used for complexity-based routing).
 #[derive(Debug, Clone)]
 pub struct FallbackTier {
     pub model: String,
@@ -197,14 +197,14 @@ impl FallbackTier {
     }
 }
 
-/// Configuration du routage par complexité (quand aucun mot-clé ne matche).
+/// Complexity-based routing configuration (used when no keywords match).
 #[derive(Debug, Clone)]
 pub struct FallbackConfig {
-    /// Seuil de complexité (score >= seuil → tier complex)
+    /// Complexity threshold (score >= threshold → complex tier)
     pub threshold: u32,
-    /// Tier pour les requêtes simples
+    /// Tier for simple requests
     pub simple: FallbackTier,
-    /// Tier pour les requêtes complexes
+    /// Tier for complex requests
     pub complex: FallbackTier,
 }
 
@@ -218,19 +218,19 @@ impl FallbackConfig {
     }
 }
 
-/// Résout les variables `${NOM}` dans une chaîne en les remplaçant
-/// par les variables d'environnement correspondantes.
+/// Resolves `${NAME}` variables in a string by replacing them
+/// with the corresponding environment variable values.
 ///
-/// Les variables non définies sont remplacées par une chaîne vide.
+/// Undefined variables are replaced with an empty string.
 ///
-/// # Exemple
+/// # Example
 ///
 /// ```rust
 /// use router_crabs::resolve_env_vars;
 ///
-/// std::env::set_var("CLEF", "valeur123");
-/// let s = resolve_env_vars("https://api.example.com?key=${CLEF}");
-/// assert_eq!(s, "https://api.example.com?key=valeur123");
+/// std::env::set_var("KEY", "value123");
+/// let s = resolve_env_vars("https://api.example.com?key=${KEY}");
+/// assert_eq!(s, "https://api.example.com?key=value123");
 /// ```
 pub fn resolve_env_vars(s: &str) -> String {
     let mut result = s.to_string();
@@ -250,53 +250,53 @@ pub fn resolve_env_vars(s: &str) -> String {
     result
 }
 
-/// Configuration complète chargée depuis un fichier YAML.
+/// Full configuration loaded from a YAML file.
 #[derive(Debug)]
 pub struct TiersConfig {
-    /// Port d'écoute pour le mode binaire
+    /// Listening port for binary mode
     pub port: u16,
-    /// Tiers de domaine résolus
+    /// Resolved domain tiers
     pub tiers: Vec<Tier>,
-    /// Configuration du routage par complexité
+    /// Complexity-based routing configuration
     pub fallback: Option<FallbackConfig>,
 }
 
 impl TiersConfig {
-    /// Charge et résout une configuration depuis un fichier YAML.
+    /// Loads and resolves a configuration from a YAML file.
     ///
     /// # Arguments
-    /// * `path` — Chemin vers le fichier `tiers.yaml`.
+    /// * `path` — Path to the `tiers.yaml` file.
     ///
-    /// # Erreurs
-    /// Retourne une erreur si le fichier est illisible, le YAML invalide,
-    /// ou si ni tier avec `default: true` ni section `fallback` n'est présent.
+    /// # Errors
+    /// Returns an error if the file is unreadable, the YAML is invalid,
+    /// or if neither a tier with `default: true` nor a `fallback` section is present.
     ///
-    /// # Exemple
+    /// # Example
     /// ```rust,no_run
     /// use router_crabs::TiersConfig;
     ///
     /// # fn main() -> anyhow::Result<()> {
     /// let config = TiersConfig::load("tiers.yaml")?;
-    /// println!("{} tiers chargés", config.tiers.len());
+    /// println!("{} tiers loaded", config.tiers.len());
     /// # Ok(())
     /// # }
     /// ```
     pub fn load(path: &str) -> anyhow::Result<Self> {
         let yaml = std::fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("Impossible de lire {}: {}", path, e))?;
+            .map_err(|e| anyhow::anyhow!("Cannot read {}: {}", path, e))?;
 
         let raw: RawConfig = serde_yaml::from_str(&yaml)
-            .map_err(|e| anyhow::anyhow!("YAML invalide dans {}: {}", path, e))?;
+            .map_err(|e| anyhow::anyhow!("Invalid YAML in {}: {}", path, e))?;
 
         let has_default = raw.tiers.iter().any(|t| t.default);
         let has_fallback = raw.fallback.is_some();
 
         if raw.tiers.is_empty() && !has_fallback {
-            anyhow::bail!("Aucun tier ni fallback défini dans {}", path);
+            anyhow::bail!("No tier nor fallback defined in {}", path);
         }
         if !raw.tiers.is_empty() && !has_default && !has_fallback {
             anyhow::bail!(
-                "Aucun tier avec `default: true` et pas de section `fallback` dans {}",
+                "No tier with `default: true` and no `fallback` section in {}",
                 path
             );
         }
@@ -314,36 +314,36 @@ impl TiersConfig {
     }
 }
 
-// ── Types OpenAI-compatibles ─────────────────────────────────────────────
+// ── OpenAI-compatible types ──────────────────────────────────────────────
 
-/// Requête chat au format OpenAI.
+/// A chat request in OpenAI format.
 #[derive(Debug, Deserialize)]
 pub struct ChatRequest {
     pub messages: Vec<Message>,
     pub stream: Option<bool>,
 }
 
-/// Un message dans une conversation.
+/// A message in a conversation.
 #[derive(Debug, Deserialize, Clone)]
 pub struct Message {
     #[allow(dead_code)]
     pub role: String,
-    /// Contenu du message. `None` pour les tool calls.
+    /// Message content. `None` for tool calls.
     pub content: Option<MessageContent>,
 }
 
-/// Contenu d'un message — texte simple ou tableau multimodal.
+/// Message content — plain text or multimodal array.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum MessageContent {
-    /// Texte simple
+    /// Plain text
     Text(String),
-    /// Contenu multimodal (texte + images)
+    /// Multimodal content (text + images)
     MultiPart(Vec<ContentPart>),
 }
 
 impl MessageContent {
-    /// Extrait le contenu textuel, quelle que soit la variante.
+    /// Extracts the textual content, regardless of variant.
     pub fn as_text(&self) -> String {
         match self {
             MessageContent::Text(s) => s.clone(),
@@ -360,7 +360,7 @@ impl MessageContent {
 }
 
 impl Message {
-    /// Retourne le contenu textuel du message, ou `""` s'il est vide.
+    /// Returns the text content of the message, or `""` if empty.
     pub fn text(&self) -> String {
         match &self.content {
             Some(c) => c.as_text(),
@@ -369,7 +369,7 @@ impl Message {
     }
 }
 
-/// Partie d'un contenu multimodal.
+/// A part of multimodal content.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum ContentPart {
@@ -380,26 +380,26 @@ pub enum ContentPart {
     ImageUrl { image_url: serde_json::Value },
 }
 
-// ── Heuristiques de complexité ──────────────────────────────────────────
+// ── Complexity heuristics ────────────────────────────────────────────────
 
-/// Calcule un score de complexité (0–12) pour une liste de messages.
+/// Computes a complexity score (0–12) for a list of messages.
 ///
-/// Heuristiques utilisées :
+/// Heuristics used:
 ///
-/// | Critère | Score |
-/// |---------|-------|
-/// | Prompt > 2000 caractères | +3 |
-/// | Prompt > 800 caractères | +2 |
-/// | Prompt > 300 caractères | +1 |
-/// | ≥ 3 marqueurs de code (```, `fn`, `class`, etc.) | +3 |
-/// | ≥ 1 marqueur de code | +2 |
-/// | ≥ 4 mots-clés techniques | +3 |
-/// | ≥ 2 mots-clés techniques | +2 |
-/// | ≥ 1 mot-clé technique | +1 |
-/// | Image présente | +5 |
-/// | Question ouverte (? + mot interrogatif) | +1 |
+/// | Criterion | Score |
+/// |-----------|-------|
+/// | Prompt > 2000 characters | +3 |
+/// | Prompt > 800 characters | +2 |
+/// | Prompt > 300 characters | +1 |
+/// | ≥ 3 code markers (```, `fn`, `class`, etc.) | +3 |
+/// | ≥ 1 code marker | +2 |
+/// | ≥ 4 technical keywords | +3 |
+/// | ≥ 2 technical keywords | +2 |
+/// | ≥ 1 technical keyword | +1 |
+/// | Image present | +5 |
+/// | Open-ended question (? + interrogative word) | +1 |
 ///
-/// # Exemple
+/// # Example
 ///
 /// ```rust
 /// use router_crabs::{Message, MessageContent, score_complexity};
@@ -408,12 +408,12 @@ pub enum ContentPart {
 ///     Message {
 ///         role: "user".into(),
 ///         content: Some(MessageContent::Text(
-///             "Explique l'architecture des microservices, compare les tradeoffs.".into()
+///             "Explain microservices architecture, compare tradeoffs.".into()
 ///         )),
 ///     },
 /// ];
 /// let score = score_complexity(&messages);
-/// assert!(score >= 3); // prompt long + technique → score élevé
+/// assert!(score >= 3); // long prompt + technical → high score
 /// ```
 pub fn score_complexity(messages: &[Message]) -> u32 {
     let full_text: String = messages.iter().map(|m| m.text()).collect::<Vec<_>>().join(" ");
@@ -422,7 +422,7 @@ pub fn score_complexity(messages: &[Message]) -> u32 {
 
     let mut score: u32 = 0;
 
-    // ── 1. Longueur du prompt ─────────────
+    // ── 1. Prompt length ─────────────────
     if len > 2000 {
         score += 3;
     } else if len > 800 {
@@ -431,7 +431,7 @@ pub fn score_complexity(messages: &[Message]) -> u32 {
         score += 1;
     }
 
-    // ── 2. Présence de code ───────────────
+    // ── 2. Code presence ──────────────────
     let code_markers = [
         "```", "fn ", "def ", "class ", "import ", "package ",
         "#include", "pub fn", "impl ", "struct ", "enum ",
@@ -444,9 +444,9 @@ pub fn score_complexity(messages: &[Message]) -> u32 {
         score += 2;
     }
 
-    // ── 3. Mots-clés techniques ───────────
+    // ── 3. Technical keywords ─────────────
     let tech_keywords = [
-        // Français
+        // French
         "explique", "analyse", "compare", "pourquoi", "comment",
         "architecture", "design pattern", "complexité",
         "optimise", "optimisation", "algorithme", "sécurité",
@@ -454,7 +454,7 @@ pub fn score_complexity(messages: &[Message]) -> u32 {
         "mémoire", "cache", "distribué", "microservice",
         "kubernetes", "benchmark", "tradeoff", "trade-off",
         "meilleure pratique", "différence entre",
-        // Anglais
+        // English
         "explain", "analyze", "why", "architecture", "algorithm",
         "optimize", "debug", "concurrent", "security", "distributed",
     ];
@@ -479,7 +479,7 @@ pub fn score_complexity(messages: &[Message]) -> u32 {
         score += 5;
     }
 
-    // ── 5. Question ouverte ────────────────
+    // ── 5. Open-ended question ─────────────
     let question_words = [
         "pourquoi", "comment", "qu'est-ce que", "quelle est",
         "peux-tu", "how", "why", "what is", "can you",
@@ -493,32 +493,32 @@ pub fn score_complexity(messages: &[Message]) -> u32 {
     score
 }
 
-// ── Sélection du tier (hybride : mots-clés + complexité) ────────────────
+// ── Tier selection (hybrid: keywords + complexity) ──────────────────────
 
-/// Sélectionne le tier le plus pertinent pour une liste de messages.
+/// Selects the most relevant tier for a list of messages.
 ///
-/// **Fonctionnement en deux phases :**
+/// **Two-phase operation:**
 ///
-/// 1. **Phase mots-clés** — Pour chaque tier, compte combien de ses mots-clés
-///    apparaissent dans le prompt. Score = match_count × weight.
-///    Le meilleur score l'emporte. Si des mots-clés matchent, cette phase
-///    gagne (les domaines explicites priment sur la complexité).
+/// 1. **Keyword phase** — For each tier, counts how many of its keywords
+///    appear in the prompt. Score = match_count × weight.
+///    The highest score wins. If keywords match, this phase
+///    wins (explicit domains take priority over complexity).
 ///
-/// 2. **Phase complexité** — Si aucun mot-clé ne matche et qu'une section
-///    `fallback` est configurée, le score de complexité du prompt détermine
-///    le tier : complexité ≥ seuil → tier complex, sinon → tier simple.
+/// 2. **Complexity phase** — If no keywords match and a `fallback`
+///    section is configured, the prompt's complexity score determines
+///    the tier: complexity ≥ threshold → complex tier, otherwise → simple tier.
 ///
-/// 3. **Fallback par défaut** — Sans section `fallback`, le tier marqué
-///    `default: true` est utilisé (compatibilité ascendante).
+/// 3. **Default fallback** — Without a `fallback` section, the tier marked
+///    `default: true` is used (backward compatibility).
 ///
 /// # Arguments
-/// * `config` — Configuration chargée via [`TiersConfig::load`]
-/// * `messages` — Messages de la conversation
+/// * `config` — Configuration loaded via [`TiersConfig::load`]
+/// * `messages` — Conversation messages
 ///
-/// # Retourne
-/// `(tier_sélectionné, raison_du_choix)`
+/// # Returns
+/// `(selected_tier, reason_for_choice)`
 ///
-/// # Exemple
+/// # Example
 ///
 /// ```rust,no_run
 /// use router_crabs::{TiersConfig, Message, MessageContent, select_tier};
@@ -529,13 +529,13 @@ pub fn score_complexity(messages: &[Message]) -> u32 {
 ///     Message {
 ///         role: "user".into(),
 ///         content: Some(MessageContent::Text(
-///             "Bonjour !".into()
+///             "Hello!".into()
 ///         )),
 ///     },
 /// ];
 /// let (tier, reason) = select_tier(&config, &messages);
-/// // "Bonjour" → score complexité = 0 → tier simple (flash)
-/// println!("→ {} (raison: {})", tier.model, reason);
+/// // "Hello" → complexity score = 0 → simple tier (flash)
+/// println!("→ {} (reason: {})", tier.model, reason);
 /// # Ok(())
 /// # }
 /// ```
@@ -546,7 +546,7 @@ pub fn select_tier<'a>(
     let full_text: String = messages.iter().map(|m| m.text()).collect::<Vec<_>>().join(" ");
     let lower = full_text.to_lowercase();
 
-    // ── Phase 1 : mots-clés par domaine ────
+    // ── Phase 1: domain keywords ──────────
     let mut best: Option<&Tier> = None;
     let mut best_score: u32 = 0;
     let mut best_matches: Vec<String> = vec![];
@@ -586,7 +586,7 @@ pub fn select_tier<'a>(
 
     if let Some(tier) = best {
         let reason = format!(
-            "domaine: {} (matches: [{}], score: {})",
+            "domain: {} (matches: [{}], score: {})",
             tier.name,
             best_matches.join(", "),
             best_score,
@@ -594,7 +594,7 @@ pub fn select_tier<'a>(
         return (Cow::Borrowed(tier), reason);
     }
 
-    // ── Phase 2 : complexité (fallback) ────
+    // ── Phase 2: complexity (fallback) ────
     if let Some(ref fb) = config.fallback {
         let complexity = score_complexity(messages);
         if complexity >= fb.threshold {
@@ -611,7 +611,7 @@ pub fn select_tier<'a>(
             return (
                 Cow::Owned(tier),
                 format!(
-                    "complexité: élevée (score: {}, seuil: {})",
+                    "complexity: high (score: {}, threshold: {})",
                     complexity, fb.threshold
                 ),
             );
@@ -629,32 +629,32 @@ pub fn select_tier<'a>(
             return (
                 Cow::Owned(tier),
                 format!(
-                    "complexité: faible (score: {}, seuil: {})",
+                    "complexity: low (score: {}, threshold: {})",
                     complexity, fb.threshold
                 ),
             );
         }
     }
 
-    // ── Phase 3 : fallback par défaut ──────
+    // ── Phase 3: default fallback ──────────
     let default = config
         .tiers
         .iter()
         .find(|t| t.default)
-        .expect("default tier requis (ni mots-clés, ni fallback, ni default)");
+        .expect("default tier required (no keywords, no fallback, no default)");
     (
         Cow::Borrowed(default),
-        "default (aucun mot-clé matché, pas de fallback)".into(),
+        "default (no keywords matched, no fallback)".into(),
     )
 }
 
-// ── Proxy vers le provider upstream ─────────────────────────────────────
+// ── Proxy to the upstream provider ─────────────────────────────────────
 
-/// Transmet une requête au provider upstream sélectionné.
+/// Forwards a request to the selected upstream provider.
 ///
-/// Remplace le champ `model` dans le body JSON par celui du tier,
-/// ajoute le header d'authentification approprié, et transmet
-/// la réponse (normale ou streamée) au client.
+/// Replaces the `model` field in the JSON body with the tier's model,
+/// adds the appropriate authentication header, and forwards
+/// the response (normal or streamed) to the client.
 pub async fn forward_request(
     client: &Client,
     tier: &Tier,

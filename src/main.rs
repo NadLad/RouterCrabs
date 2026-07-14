@@ -35,7 +35,7 @@ async fn list_models(State(state): State<Arc<AppState>>) -> Json<serde_json::Val
         })
         .collect();
 
-    // Ajoute les modèles de fallback si présents
+    // Add fallback models if present
     if let Some(ref fb) = state.config.fallback {
         models.push(serde_json::json!({
             "id": fb.simple.model,
@@ -64,7 +64,7 @@ async fn chat_completions(
         Err(e) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("Requête invalide: {}", e)})),
+                Json(serde_json::json!({"error": format!("Invalid request: {}", e)})),
             )
                 .into_response();
         }
@@ -78,7 +78,7 @@ async fn chat_completions(
         provider = %tier.api_base,
         reason,
         stream = req.stream.unwrap_or(false),
-        "→ Routage"
+        "→ Routing"
     );
 
     match forward_request(&state.client, &tier, body).await {
@@ -97,10 +97,10 @@ async fn chat_completions(
             response
         }
         Err(e) => {
-            tracing::error!("Erreur proxy: {}", e);
+            tracing::error!("Proxy error: {}", e);
             (
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": format!("Erreur proxy: {}", e)})),
+                Json(serde_json::json!({"error": format!("Proxy error: {}", e)})),
             )
                 .into_response()
         }
@@ -136,26 +136,26 @@ async fn main() -> anyhow::Result<()> {
         .with_state(Arc::clone(&state));
 
     let addr = format!("0.0.0.0:{}", port);
-    info!("🚀 RouterCrabs démarré sur http://{}", addr);
+    info!("🚀 RouterCrabs started on http://{}", addr);
     info!("   Config: {}", config_path);
 
-    // Affiche les tiers de domaine
+    // Display domain tiers
     if !state.config.tiers.is_empty() {
-        info!("   Tiers de domaine:");
+        info!("   Domain tiers:");
         for tier in &state.config.tiers {
             let badge = if tier.default { " 🏠" } else { "" };
             let kw_count = tier.keywords.len();
             info!(
-                "     {:<20} → {:30}  [{} mots-clés, poids={}]{}",
+                "     {:<20} → {:30}  [{} keywords, weight={}]{}",
                 tier.name, tier.model, kw_count, tier.weight, badge
             );
         }
     }
 
-    // Affiche le fallback par complexité
+    // Display complexity fallback
     if let Some(ref fb) = state.config.fallback {
         info!(
-            "   Fallback complexité (seuil: {})",
+            "   Complexity fallback (threshold: {})",
             fb.threshold
         );
         info!(
