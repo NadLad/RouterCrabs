@@ -22,7 +22,7 @@ async fn health() -> &'static str {
 }
 
 async fn list_models(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let models: Vec<serde_json::Value> = state
+    let mut models: Vec<serde_json::Value> = state
         .config
         .tiers
         .iter()
@@ -34,6 +34,21 @@ async fn list_models(State(state): State<Arc<AppState>>) -> Json<serde_json::Val
             })
         })
         .collect();
+
+    // Ajoute les modèles de fallback si présents
+    if let Some(ref fb) = state.config.fallback {
+        models.push(serde_json::json!({
+            "id": fb.simple.model,
+            "object": "model",
+            "owned_by": "router-crabs",
+        }));
+        models.push(serde_json::json!({
+            "id": fb.complex.model,
+            "object": "model",
+            "owned_by": "router-crabs",
+        }));
+    }
+
     Json(serde_json::json!({
         "object": "list",
         "data": models,
@@ -55,7 +70,7 @@ async fn chat_completions(
         }
     };
 
-    let (tier, reason) = select_tier(&state.config.tiers, &req.messages);
+    let (tier, reason) = select_tier(&state.config, &req.messages);
 
     info!(
         tier = %tier.name,
@@ -66,7 +81,7 @@ async fn chat_completions(
         "→ Routage"
     );
 
-    match forward_request(&state.client, tier, body).await {
+    match forward_request(&state.client, &tier, body).await {
         Ok(mut response) => {
             response.headers_mut().insert(
                 "X-RouterCrabs-Tier",
@@ -123,13 +138,33 @@ async fn main() -> anyhow::Result<()> {
     let addr = format!("0.0.0.0:{}", port);
     info!("🚀 RouterCrabs démarré sur http://{}", addr);
     info!("   Config: {}", config_path);
-    info!("   Tiers chargés:");
-    for tier in &state.config.tiers {
-        let badge = if tier.default { " 🏠" } else { "" };
-        let kw_count = tier.keywords.len();
+
+    // Affiche les tiers de domaine
+    if !state.config.tiers.is_empty() {
+        info!("   Tiers de domaine:");
+        for tier in &state.config.tiers {
+            let badge = if tier.default { " 🏠" } else { "" };
+            let kw_count = tier.keywords.len();
+            info!(
+                "     {:<20} → {:30}  [{} mots-clés, poids={}]{}",
+                tier.name, tier.model, kw_count, tier.weight, badge
+            );
+        }
+    }
+
+    // Affiche le fallback par complexité
+    if let Some(ref fb) = state.config.fallback {
         info!(
-            "     {:<20} → {:30}  [{} mots-clés, poids={}]{}",
-            tier.name, tier.model, kw_count, tier.weight, badge
+            "   Fallback complexité (seuil: {})",
+            fb.threshold
+        );
+        info!(
+            "     simple   → {:30}",
+            fb.simple.model
+        );
+        info!(
+            "     complex  → {:30}",
+            fb.complex.model
         );
     }
 

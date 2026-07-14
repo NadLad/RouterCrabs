@@ -1,101 +1,54 @@
-# iziRouter — Configuration des tiers
-# Chaque tier route vers un modèle spécifique selon les mots-clés détectés.
+# RouterCrabs — exemple de configuration hybride
 #
-# ${VARIABLE} sera remplacé par la valeur de la variable d'environnement.
+# Phase 1 — Mots-clés de domaine : si des mots-clés matchent → tier du domaine
+# Phase 2 — Complexité : sinon, heuristiques de complexité → simple ou complex
+#
+# Heuristiques de complexité (score 0-12) :
+#   - Longueur du prompt (>300, >800, >2000 chars)       → +1, +2, +3
+#   - Présence de code (```, fn, class, SELECT…)          → +2, +3
+#   - Mots-clés techniques (explique, architecture…)       → +1, +2, +3
+#   - Images                                               → +5
+#   - Question ouverte (? + pourquoi/comment)               → +1
 
 port: 8001
 
+# ── Tiers par domaine (mots-clés) ──────────────────────────
+# Ajoute ici tes domaines métier. Les mots-clés sont en substring
+# case-insensitive. Le score = nombre_de_matchs × weight.
+# En cas d'égalité, le weight départage, puis default: true.
 tiers:
-  # ── Agriculture ──────────────────────────────────────────────
-  - model: "agrillm-v2"
-    api_base: "${AGRI_API_BASE:-https://api.agrillm.com/v1}"
-    api_key: "${AGRI_API_KEY}"
-    keywords:
-      - agriculture
-      - agronomie
-      - culture
-      - irrigation
-      - sol
-      - plante
-      - récolte
-      - ferme
-      - élevage
-      - vétérinaire
-      - pesticide
-      - engrais
-      - rendement
-      - serre
-      - bétail
-      - semence
-      - tracteur
-      - moisson
-      - prairie
-      - pâturage
-    weight: 10
+  # Exemple : domaine agriculture
+  # - model: "agrillm-v2"
+  #   api_base: "https://api.agrillm.com/v1"
+  #   api_key: "${AGRI_API_KEY}"
+  #   keywords: [agriculture, agronomie, sol, plante, récolte, ferme, élevage]
+  #   weight: 20
 
-  # ── Recherche scientifique ───────────────────────────────────
-  - model: "deepseek-v4-pro"
-    api_base: "${RESEARCH_API_BASE:-https://api.deepseek.com/v1}"
-    api_key: "${RESEARCH_API_KEY:-${DEEPSEEK_API_KEY}}"
-    keywords:
-      - recherche
-      - scientifique
-      - papier
-      - étude
-      - article
-      - hypothèse
-      - protocole
-      - expérience
-      - publication
-      - peer-review
-      - méthodologie
-      - résultat
-      - analyse statistique
-      - labo
-      - laboratoire
-      - thèse
-      - doctorat
-      - biologie
-      - physique
-      - chimie
-      - mathématiques
-    weight: 10
+  # Exemple : domaine code
+  # - model: "deepseek-v4-pro"
+  #   api_base: "https://api.deepseek.com"
+  #   api_key: "${DEEPSEEK_API_KEY}"
+  #   keywords: [code, Rust, Python, déploiement, API, database, SQL, Docker]
+  #   weight: 10
 
-  # ── Code / Développement ─────────────────────────────────────
-  - model: "deepseek-v4-pro"
-    api_base: "${CODE_API_BASE:-https://api.deepseek.com/v1}"
-    api_key: "${CODE_API_KEY:-${DEEPSEEK_API_KEY}}"
-    keywords:
-      - code
-      - programmer
-      - debug
-      - fonction
-      - algorithme
-      - compiler
-      - déployer
-      - API
-      - database
-      - SQL
-      - Rust
-      - Python
-      - JavaScript
-      - Docker
-      - Kubernetes
-      - refactor
-      - architecture
-      - design pattern
-      - test unitaire
-      - CI/CD
-      - GitHub
-      - pull request
-      - commit
-      - branche
-      - merge
-    weight: 5
-
-  # ── Général (fallback) ───────────────────────────────────────
+  # Fallback ultime (si ni mots-clés ni complexité configurés)
   - model: "deepseek-v4-flash"
-    api_base: "${DEEPSEEK_API_BASE:-https://api.deepseek.com/v1}"
+    api_base: "https://api.deepseek.com"
     api_key: "${DEEPSEEK_API_KEY}"
-    keywords: []        # pas de mots-clés → toujours en fallback
+    keywords: []
     default: true
+
+# ── Routage par complexité (optionnel mais recommandé) ─────
+# S'active quand aucun mot-clé de domaine ne matche.
+# Décommente la section pour l'activer :
+#
+# fallback:
+#   threshold: 3
+#   simple:
+#     model: "deepseek-v4-flash"
+#     api_base: "https://api.deepseek.com"
+#     api_key: "${DEEPSEEK_API_KEY}"
+#   complex:
+#     model: "deepseek-v4-pro"
+#     api_base: "https://api.deepseek.com"
+#     api_key: "${DEEPSEEK_API_KEY}"
