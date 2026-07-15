@@ -135,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/chat/completions", post(chat_completions))
         .with_state(Arc::clone(&state));
 
-    let addr = format!("0.0.0.0:{}", port);
+    let addr = format!("{}:{}", state.config.host, port);
     info!("🚀 RouterCrabs started on http://{}", addr);
     info!("   Config: {}", config_path);
 

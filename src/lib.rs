@@ -129,12 +129,19 @@ fn default_complexity_threshold() -> u32 { 3 }
 pub struct RawConfig {
     #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default = "default_host")]
+    pub host: String,
+    /// Optional shared secret for proxy-level authentication.
+    /// When set, clients must send an `X-RouterCrabs-Key` header with this value.
+    #[serde(default)]
+    pub proxy_key: Option<String>,
     #[serde(default)]
     pub tiers: Vec<RawTier>,
     pub fallback: Option<RawFallbackConfig>,
 }
 
 fn default_port() -> u16 { 8001 }
+fn default_host() -> String { "127.0.0.1".into() }
 
 // ── Resolved tier (environment variables interpolated) ───────────────────
 
@@ -255,6 +262,11 @@ pub fn resolve_env_vars(s: &str) -> String {
 pub struct TiersConfig {
     /// Listening port for binary mode
     pub port: u16,
+    /// Listening address (default: `127.0.0.1`)
+    pub host: String,
+    /// Optional shared secret for proxy-level authentication.
+    /// When set, clients must send an `X-RouterCrabs-Key` header with this value.
+    pub proxy_key: Option<String>,
     /// Resolved domain tiers
     pub tiers: Vec<Tier>,
     /// Complexity-based routing configuration
@@ -310,7 +322,7 @@ impl TiersConfig {
 
         let fallback = raw.fallback.map(FallbackConfig::from_raw);
 
-        Ok(Self { port: raw.port, tiers, fallback })
+        Ok(Self { port: raw.port, host: raw.host, proxy_key: raw.proxy_key, tiers, fallback })
     }
 }
 
