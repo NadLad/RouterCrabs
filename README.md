@@ -83,10 +83,10 @@ If score ≥ `threshold` → **complex** model. Otherwise → **simple** model.
 
 #### Customizing Keywords — `keywords.yaml`
 
-The technical keywords, question words, and code markers used for scoring are loaded from a separate YAML file. This file is **trilingual** by default (French, English, Arabic) and fully configurable:
+The technical keywords, question words, and code markers used for scoring are loaded from a separate YAML file. This file is **trilingual** by default (French, English, Arabic) and organized by language for easy maintenance:
 
 ```yaml
-# keywords.yaml — RouterCrabs Complexity Scoring Keywords
+# keywords.yaml — v0.3+ language-based format
 
 code_markers:
   - "```"
@@ -95,23 +95,89 @@ code_markers:
   - "SELECT "
   # ...
 
-technical_keywords:
-  - "explique"     # FR — explain
-  - "explain"      # EN
-  - "اشرح"         # AR
-  - "algorithme"   # FR
-  - "algorithm"    # EN
-  - "خوارزمية"     # AR
-  # ...
+languages:
+  french:
+    technical_keywords:
+      - "explique"
+      - "algorithme"
+      - "sécurité"
+      # ...
+    question_words:
+      - "pourquoi"
+      - "comment"
+      # ...
 
-question_words:
-  - "pourquoi"     # FR
-  - "why"          # EN
-  - "لماذا"        # AR
-  # ...
+  english:
+    technical_keywords:
+      - "explain"
+      - "algorithm"
+      - "security"
+      # ...
+    question_words:
+      - "why"
+      - "how"
+      # ...
+
+  arabic:
+    technical_keywords:
+      - "اشرح"
+      - "خوارزمية"
+      - "أمان"
+      # ...
+    question_words:
+      - "لماذا"
+      - "كيف"
+      # ...
 ```
 
-If the file is missing or a section is empty, built-in defaults are used. Edit the file and restart the service — no recompilation needed.
+All languages are merged into one pool at runtime — add as many as you need. If the file is missing or a section is empty, built-in defaults are used. Edit and restart the service — no recompilation needed.
+
+##### Adding a New Language
+
+To add Spanish, German, Italian, or any other language, copy one of the existing language blocks and translate the keywords:
+
+```yaml
+languages:
+  # ... existing french, english, arabic ...
+
+  spanish:
+    technical_keywords:
+      - "explica"
+      - "analiza"
+      - "compara"
+      - "arquitectura"
+      - "algoritmo"
+      - "optimiza"
+      - "seguridad"
+      - "implementa"
+      - "configura"
+      - "despliega"
+      - "compila"
+      - "concurrente"
+      - "memoria"
+      - "cache"
+      - "latencia"
+      - "escalabilidad"
+      - "contenedor"
+      - "prueba unitaria"
+      - "cifra"
+      - "protocolo"
+      # ... add more as needed
+    question_words:
+      - "por qué"
+      - "cómo"
+      - "qué es"
+      - "puedes"
+      - "qué"
+      - "quién"
+      - "dónde"
+      - "cuándo"
+      - "cuál"
+```
+
+That's it. Restart RouterCrabs and your new language is active — a `"¿cómo implementar un middleware?"` will now go to Pro, while `"¿cómo estás?"` stays on Flash.
+
+> **Tip:** A commented Spanish template is already included at the bottom of `keywords.yaml`. Uncomment and customize.
 
 ### 3. Full Algorithm (hybrid)
 

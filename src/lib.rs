@@ -64,6 +64,7 @@
 //! ```
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use reqwest::Client;
 use serde::Deserialize;
 use tokio_stream::StreamExt;
@@ -76,10 +77,29 @@ use axum::{
 // ── Complexity Scoring Keywords ────────────────────────────────────────
 
 /// Raw scoring keywords deserialized from `keywords.yaml`.
+///
+/// Supports two formats:
+///   - **v0.3+** (language-based): `languages: { french: { technical_keywords: [...] }, ... }`
+///   - **v0.2.x** (flat): `technical_keywords: [...]`, `question_words: [...]`
 #[derive(Debug, Deserialize)]
 struct RawScoringKeywords {
     code_markers: Option<Vec<String>>,
+    // ── v0.2.x flat format (backward compat) ──
+    #[serde(default)]
     technical_keywords: Option<Vec<String>>,
+    #[serde(default)]
+    question_words: Option<Vec<String>>,
+    // ── v0.3+ language-based format ──
+    #[serde(default)]
+    languages: Option<HashMap<String, RawLanguageKeywords>>,
+}
+
+/// A single language block inside `languages:`.
+#[derive(Debug, Deserialize)]
+struct RawLanguageKeywords {
+    #[serde(default)]
+    technical_keywords: Option<Vec<String>>,
+    #[serde(default)]
     question_words: Option<Vec<String>>,
 }
 
@@ -226,14 +246,73 @@ impl ScoringKeywords {
             code_markers: raw.code_markers
                 .filter(|v| !v.is_empty())
                 .unwrap_or_else(default_code_markers),
-            technical_keywords: raw.technical_keywords
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(default_technical_keywords),
-            question_words: raw.question_words
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(default_question_words),
+            technical_keywords: resolve_keywords(
+                &raw.languages,
+                raw.technical_keywords.as_ref(),
+                    |l| l.technical_keywords.as_ref(),
+                default_technical_keywords,
+                "technical_keywords",
+            ),
+            question_words: resolve_keywords(
+                &raw.languages,
+                raw.question_words.as_ref(),
+                    |l| l.question_words.as_ref(),
+                default_question_words,
+                "question_words",
+            ),
         }
     }
+}
+
+/// Resolves keywords from either the language-based (`languages:`) or
+/// flat v0.2.x format. Returns built-in defaults when neither is present.
+fn resolve_keywords<F>(
+    languages: &Option<HashMap<String, RawLanguageKeywords>>,
+    flat: Option<&Vec<String>>,
+    extract: F,
+    default: fn() -> Vec<String>,
+    label: &str,
+) -> Vec<String>
+where
+    F: Fn(&RawLanguageKeywords) -> Option<&Vec<String>>,
+{
+    // v0.3+: flatten all languages into one pool
+    if let Some(langs) = languages {
+        if !langs.is_empty() {
+            let mut merged: Vec<String> = Vec::new();
+            for (name, block) in langs {
+                if let Some(words) = extract(block) {
+                    if !words.is_empty() {
+                        merged.extend(words.iter().cloned());
+                    }
+                }
+                if merged.is_empty() {
+                    tracing::warn!(
+                        "Language '{}' in keywords.yaml has no '{}' — skipping",
+                        name, label
+                    );
+                }
+            }
+            if !merged.is_empty() {
+                tracing::debug!("Loaded {} keyword(s) from {} language(s)", merged.len(), langs.len());
+                return merged;
+            }
+        }
+    }
+
+    // v0.2.x: use flat lists (backward compat)
+    if let Some(words) = flat {
+        if !words.is_empty() {
+            return words.clone();
+        }
+    }
+
+    // Fallback: built-in defaults
+    tracing::warn!(
+        "No {} found in keywords.yaml — using built-in defaults",
+        label
+    );
+    default()
 }
 
 // ── YAML Configuration ──────────────────────────────────────────────────

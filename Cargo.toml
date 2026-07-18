@@ -1,6 +1,6 @@
 [package]
 name = "router-crabs"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 description = "🧭 Multi-tier LLM router — automatically routes to the right model based on detected domain. Multi-provider (DeepSeek, OpenAI, Groq, Anthropic, OpenRouter, Mistral…). Usable as a standalone binary or as a Rust library."
 license = "MIT"
