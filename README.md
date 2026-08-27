@@ -231,6 +231,7 @@ fallback:
 | `port` | ❌ | `8001` | Listening port |
 | `host` | ❌ | `127.0.0.1` | Bind address (`0.0.0.0` = LAN) |
 | `keywords_path` | ❌ | `keywords.yaml` | Path to scoring keywords file |
+| `journal_path` | ❌ | `journal.jsonl` | Path to the append-only request journal |
 
 ### Tier Fields
 
@@ -255,6 +256,55 @@ fallback:
 | `complex.model` | ✅ | — | Model for complex requests |
 | `complex.api_base` | ✅ | — | Base URL |
 | `complex.api_key` | ✅ | — | API key |
+
+---
+
+## Request Journal & Feedback
+
+Every request is appended to an **append-only JSONL journal** (`journal.jsonl`,
+chmod 600) — one JSON object per line. This is the raw material that makes
+later learning possible (feedback → analysis → keyword updates).
+
+**`req` line** — written on every request:
+```json
+{"type":"req","id":"ab3b89c6-…","ts":"2026-08-27T21:16:20Z","profile":"agrix","prompt":"pourquoi le ciel est bleu ?","prompt_truncated":false,"score":2,"matched":["pourquoi"],"routed":"pro","reason":"complexity: high (score: 2, threshold: 2)"}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `type` | string | `"req"` or `"fb"` |
+| `id` | uuid | Unique request id (only on `req`) |
+| `ts` | string | ISO 8601 UTC timestamp |
+| `profile` | string | Emitting profile, from the `X-RouterCrabs-Profile` header (default `unknown`) |
+| `prompt` | string | Last user message, truncated to 2000 chars |
+| `prompt_truncated` | bool | `true` if the prompt was truncated |
+| `score` | int | Complexity score (0–12) |
+| `matched` | array | Technical keywords that matched |
+| `routed` | string | `"pro"`, `"flash"`, or the domain tier name |
+| `reason` | string | Human-readable routing reason |
+
+**`fb` line** — written when explicit feedback arrives via
+`POST /v1/feedback`:
+```json
+{"type":"fb","req_id":"ab3b89c6-…","ts":"2026-08-27T21:16:39Z","correct_tier":"flash","source":"slash"}
+```
+
+Feedback endpoint:
+```bash
+# "The last request should have gone to Flash" (it went to Pro)
+curl -s -X POST http://localhost:8001/v1/feedback \
+  -H "Content-Type: application/json" \
+  -d '{"correction":"flash"}'
+
+# "The last request should have gone to Pro" (it went to Flash)
+curl -s -X POST http://localhost:8001/v1/feedback \
+  -H "Content-Type: application/json" \
+  -d '{"correction":"pro"}'
+```
+
+`correction` accepts `"pro"` or `"flash"` (or `correct_tier` as an alias);
+anything else returns HTTP 400. `source` defaults to `"slash"` (explicit
+`/pro` and `/flash` commands) — pass `"agent"` for agent self-assessment.
 
 ---
 

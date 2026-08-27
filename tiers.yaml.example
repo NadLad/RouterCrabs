@@ -11,6 +11,11 @@
 #   - Open-ended question (? + why/how)                    → +1
 
 port: 8001
+host: "127.0.0.1"
+
+# Path to the append-only JSONL journal (default: journal.jsonl).
+# Written at chmod 600; every request is logged as one JSON line.
+# journal_path: "journal.jsonl"
 
 # ── Domain tiers (keywords) ──────────────────────────
 # Add your business domains here. Keywords use case-insensitive
