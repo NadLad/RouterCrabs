@@ -53,8 +53,6 @@ languages:
       - "explique"
       - "analyse"
       - "compare"
-      - "pourquoi"
-      - "comment"
       - "architecture"
       - "design pattern"
       - "complexité"
@@ -126,6 +124,15 @@ languages:
       - "où"
       - "quand"
       - "lequel"
+    simple_keywords:
+      - "salut"
+      - "bonjour"
+      - "bonsoir"
+      - "merci"
+      - "coucou"
+      - "ça va"
+      - "au revoir"
+      - "s'il te plaît"
 
   # ── English ─────────────────────────────────────────────────
   english:
@@ -133,8 +140,6 @@ languages:
       - "explain"
       - "analyze"
       - "compare"
-      - "why"
-      - "how"
       - "architecture"
       - "design pattern"
       - "complexity"
@@ -204,6 +209,15 @@ languages:
       - "where"
       - "when"
       - "which"
+    simple_keywords:
+      - "hello"
+      - "hi"
+      - "hey"
+      - "thanks"
+      - "thank you"
+      - "good morning"
+      - "good night"
+      - "please"
 
   # ── Arabic ──────────────────────────────────────────────────
   arabic:
@@ -211,8 +225,6 @@ languages:
       - "اشرح"
       - "حلل"
       - "قارن"
-      - "لماذا"
-      - "كيف"
       - "معمارية"
       - "نمط تصميم"
       - "تعقيد"
@@ -284,6 +296,14 @@ languages:
       - "أين"
       - "متى"
       - "أي"
+    simple_keywords:
+      - "مرحبا"
+      - "أهلا"
+      - "شكرا"
+      - "صباح الخير"
+      - "مساء الخير"
+      - "مع السلامة"
+      - "من فضلك"
 
   # ═══════════════════════════════════════════════════════════
   # ── TEMPLATE: Add your language below ──────────────────────

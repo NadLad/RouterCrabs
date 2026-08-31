@@ -62,20 +62,22 @@ The tier with the highest score wins. Ties are broken by `weight`, then `default
 
 ### 2. Complexity Routing (fallback)
 
-When **no domain keywords** match, RouterCrabs computes a **complexity score** (0–12) based on 5 local heuristics:
+When **no domain keywords** match, RouterCrabs computes a **complexity score** — a *signed* integer that can go negative — as the sum of objective heuristics plus **per-keyword signed weights**:
 
-| Heuristic | Scoring |
+| Component | Scoring |
 |---|---|
 | **Prompt length** | >2000 chars: +3<br>>800 chars: +2<br>>300 chars: +1 |
 | **Code presence** | ≥3 markers (```, `fn`, `class`, `SELECT`…): +3<br>≥1: +2 |
-| **Technical keywords** | ≥4: +3 (explain, architecture, algorithm, compare…)<br>≥2: +2<br>≥1: +1 |
 | **Images** | +5 (always → Pro) |
-| **Open-ended question** | `?` + why/how/what is/can you: +1 |
+| **Technical keywords** | +1 each (explain, architecture, algorithm, compare…) |
+| **Simple keywords** | **−3 each** (salut, hello, thanks, merci…) — counterweight |
+| **Question words** | 0 (neutral markers — pourquoi, why, comment…) |
 
-If score ≥ `threshold` → **complex** model. Otherwise → **simple** model.
+If score ≥ `threshold` → **complex** model. Otherwise → **simple** model. A negative score (several simple words) reliably stays on the simple model.
 
 ```
-"Hello"               → score 0 < 3 → DeepSeek Flash ✅
+"salut merci"          → score −6 < 3 → DeepSeek Flash ✅
+"Hello"                → score −3 < 3 → DeepSeek Flash ✅
 "Explain microservices → score 5 ≥ 3 → DeepSeek Pro   ✅
  architecture, compare
  performance tradeoffs"
@@ -83,7 +85,7 @@ If score ≥ `threshold` → **complex** model. Otherwise → **simple** model.
 
 #### Customizing Keywords — `keywords.yaml`
 
-The technical keywords, question words, and code markers used for scoring are loaded from a separate YAML file. This file is **trilingual** by default (French, English, Arabic) and organized by language for easy maintenance:
+The technical keywords, **simple keywords**, question words, and code markers used for scoring are loaded from a separate YAML file. This file is **trilingual** by default (French, English, Arabic) and organized by language for easy maintenance. Each list carries a signed weight: technical `+1`, simple `−3`, question `0`.
 
 ```yaml
 # keywords.yaml — v0.3+ language-based format
@@ -267,7 +269,7 @@ later learning possible (feedback → analysis → keyword updates).
 
 **`req` line** — written on every request:
 ```json
-{"type":"req","id":"ab3b89c6-…","ts":"2026-08-27T21:16:20Z","profile":"agrix","prompt":"pourquoi le ciel est bleu ?","prompt_truncated":false,"score":2,"matched":["pourquoi"],"routed":"pro","reason":"complexity: high (score: 2, threshold: 2)"}
+{"type":"req","id":"ab3b89c6-…","ts":"2026-08-27T21:16:20Z","profile":"unknown","prompt":"explique l'architecture des microservices","prompt_truncated":false,"score":3,"matched":["explique","architecture","microservice"],"weights":[["explique",1],["architecture",1],["microservice",1]],"routed":"pro","reason":"complexity: high (score: 3, threshold: 3)"}
 ```
 
 | Field | Type | Description |
@@ -278,8 +280,9 @@ later learning possible (feedback → analysis → keyword updates).
 | `profile` | string | Emitting profile, from the `X-RouterCrabs-Profile` header (default `unknown`) |
 | `prompt` | string | Last user message, truncated to 2000 chars |
 | `prompt_truncated` | bool | `true` if the prompt was truncated |
-| `score` | int | Complexity score (0–12) |
+| `score` | int | Complexity score — a **signed** integer (can be negative) |
 | `matched` | array | Technical keywords that matched |
+| `weights` | array | Matched keywords with their signed weight (`[term, weight]` pairs) |
 | `routed` | string | `"pro"`, `"flash"`, or the domain tier name |
 | `reason` | string | Human-readable routing reason |
 
@@ -305,6 +308,64 @@ curl -s -X POST http://localhost:8001/v1/feedback \
 `correction` accepts `"pro"` or `"flash"` (or `correct_tier` as an alias);
 anything else returns HTTP 400. `source` defaults to `"slash"` (explicit
 `/pro` and `/flash` commands) — pass `"agent"` for agent self-assessment.
+
+---
+
+## Self-Improvement Loop — `analyze` / `apply`
+
+RouterCrabs ships a two-command loop that turns the journal + feedback into
+**proposed** keyword edits — but **never applies anything automatically**.
+The workflow is strictly: observe → propose → human approve → apply.
+
+### `router-crabs analyze`
+
+Scans the journal, joins each `fb` line to its originating `req`, aggregates
+feedback per term, and writes **edit proposals** as YAML files in
+`<config-dir>/proposals/`. It only *reads* the config — it never modifies it.
+
+```bash
+router-crabs analyze
+# Propositions : 0
+# Répertoire : ~/.config/routercrabs/proposals/
+```
+
+A proposal looks like:
+
+```yaml
+id: 20260827T213000Z-a1b2c3d4
+created_at: 2026-08-27T21:30:00Z
+type: add            # add | adjust | remove
+target: technical_keywords   # technical_keywords | simple_keywords | question_words
+language: french     # french | english | arabic
+term: refactoriser
+weight: 1
+reason: "4 corrections vers flash sur 6 requêtes"
+evidence:
+  req_ids: ["…", "…", "…"]
+  correct_tier_ratio: 0.67
+```
+
+Proposals are only generated once a term crosses a threshold (by default
+5 promotions for `add`, 3 corrections for `adjust`/`remove`). With a small
+journal the output is honestly **0 propositions** — the thresholds are a
+deliberate anti-runaway guard.
+
+### `router-crabs apply <proposal.yaml>`
+
+Applies an **already-approved** proposal to `keywords.yaml`, with guards:
+
+1. Backs up `keywords.yaml` to a timestamped `.bak` file (`cp -a`).
+2. Applies the edit (add / adjust weight / remove term).
+3. Re-validates the resulting YAML — on parse failure it **aborts** and
+   leaves the backup untouched.
+4. Restarts the service via `systemctl --user restart routercrabs.service`.
+
+```bash
+router-crabs apply ~/.config/routercrabs/proposals/20260827T213000Z-a1b2c3d4.yaml
+```
+
+Because `apply` edits a real config file, only run it on a proposal a human
+has explicitly approved.
 
 ---
 
