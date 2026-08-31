@@ -380,6 +380,9 @@ pub struct RawConfig {
     /// Path to the complexity scoring keywords file (default: `keywords.yaml`)
     #[serde(default = "default_keywords_path")]
     pub keywords_path: String,
+    /// Path to the append-only JSONL journal (default: `journal.jsonl`)
+    #[serde(default = "default_journal_path")]
+    pub journal_path: String,
     #[serde(default)]
     pub tiers: Vec<RawTier>,
     pub fallback: Option<RawFallbackConfig>,
@@ -388,6 +391,7 @@ pub struct RawConfig {
 fn default_port() -> u16 { 8001 }
 fn default_host() -> String { "127.0.0.1".into() }
 fn default_keywords_path() -> String { "keywords.yaml".into() }
+fn default_journal_path() -> String { "journal.jsonl".into() }
 
 // ── Resolved tier (environment variables interpolated) ───────────────────
 
@@ -519,6 +523,8 @@ pub struct TiersConfig {
     pub fallback: Option<FallbackConfig>,
     /// Complexity scoring keywords (loaded from `keywords_path`)
     pub keywords: ScoringKeywords,
+    /// Path to the append-only JSONL journal
+    pub journal_path: String,
 }
 
 impl TiersConfig {
@@ -571,7 +577,7 @@ impl TiersConfig {
         let fallback = raw.fallback.map(FallbackConfig::from_raw);
         let keywords = ScoringKeywords::load(&raw.keywords_path);
 
-        Ok(Self { port: raw.port, host: raw.host, proxy_key: raw.proxy_key, tiers, fallback, keywords })
+        Ok(Self { port: raw.port, host: raw.host, proxy_key: raw.proxy_key, tiers, fallback, keywords, journal_path: raw.journal_path })
     }
 }
 
@@ -741,6 +747,50 @@ pub fn score_complexity(messages: &[Message], keywords: &ScoringKeywords) -> u32
     }
 
     score
+}
+
+/// Returns the technical keywords that matched the last user message.
+///
+/// Mirrors the keyword-matching logic inside [`score_complexity`] so the
+/// journal can record *which* terms fired (for later analysis), not just
+/// the final score. Matching is case-insensitive substring over the last
+/// user message only — the same text [`score_complexity`] scores.
+///
+/// # Example
+///
+/// ```rust
+/// use router_crabs::{Message, MessageContent, ScoringKeywords, matched_technical_keywords};
+///
+/// let kw = ScoringKeywords::default();
+/// let messages = vec![
+///     Message {
+///         role: "user".into(),
+///         content: Some(MessageContent::Text(
+///             "Explique comment implémenter un cache distribué".into()
+///         )),
+///     },
+/// ];
+/// let matched = matched_technical_keywords(&messages, &kw);
+/// assert!(!matched.is_empty());
+/// ```
+pub fn matched_technical_keywords(
+    messages: &[Message],
+    keywords: &ScoringKeywords,
+) -> Vec<String> {
+    let last_user_text = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.text())
+        .unwrap_or_default();
+    let lower = last_user_text.to_lowercase();
+
+    keywords
+        .technical_keywords
+        .iter()
+        .filter(|kw| lower.contains(kw.as_str()))
+        .cloned()
+        .collect()
 }
 
 // ── Tier selection (hybrid: keywords + complexity) ──────────────────────
