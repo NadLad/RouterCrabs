@@ -3,12 +3,15 @@
 # Phase 1 — Domain keywords: if keywords match → domain tier
 # Phase 2 — Complexity: otherwise, complexity heuristics → simple or complex
 #
-# Complexity heuristics (score 0-12):
+# Complexity score = objective heuristics + signed keyword weights
+# (a signed integer — it can go negative):
 #   - Prompt length (>300, >800, >2000 chars)          → +1, +2, +3
 #   - Code presence (```, fn, class, SELECT…)            → +2, +3
-#   - Technical keywords (explain, architecture…)         → +1, +2, +3
 #   - Images                                              → +5
-#   - Open-ended question (? + why/how)                    → +1
+#   - Technical keywords                                 → +1 each
+#   - Simple keywords (salut, hello, merci…)             → -3 each (counterweight)
+#   - Question words (pourquoi, why, comment…)           → 0 (neutral markers)
+# Score >= threshold → complex model; otherwise → simple model.
 
 port: 8001
 host: "127.0.0.1"
