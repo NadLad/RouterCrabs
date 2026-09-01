@@ -664,6 +664,23 @@ pub fn resolve_env_vars(s: &str) -> String {
     result
 }
 
+/// The semantic "side" of the complexity axis a tier represents.
+///
+/// RouterCrabs is model-agnostic: it does not know the names `pro` or
+/// `flash`. It only distinguishes *simple* (fast/cheap) from *complex*
+/// (strong/expensive) tiers, plus domain tiers that sit off that axis
+/// entirely. Feedback and the RSI analyzer operate on this classification,
+/// never on hardcoded model identifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TierKind {
+    /// The fast/cheap fallback tier (`fallback.simple`).
+    Simple,
+    /// The strong/expensive fallback tier (`fallback.complex`).
+    Complex,
+    /// A domain tier (`tiers[]`), or an unrecognized name.
+    Other,
+}
+
 /// Full configuration loaded from a YAML file.
 #[derive(Debug)]
 pub struct TiersConfig {
@@ -737,6 +754,47 @@ impl TiersConfig {
         let keywords = ScoringKeywords::load(&raw.keywords_path);
 
         Ok(Self { port: raw.port, host: raw.host, proxy_key: raw.proxy_key, tiers, fallback, keywords, keywords_path: raw.keywords_path, journal_path: raw.journal_path })
+    }
+
+    /// Classifies a feedback `correction` string into its [`TierKind`].
+    ///
+    /// The value may be a configured model name (matched case-insensitively)
+    /// or a generic semantic alias. This is the single place where a routing
+    /// direction is decided, so no model identifier ever needs to be
+    /// hardcoded elsewhere.
+    ///
+    /// Aliases (generic router vocabulary, not provider-specific):
+    /// * `simple` / `flash` / `fast` / `easy` / `cheap` / `low` → [`TierKind::Simple`]
+    /// * `complex` / `pro` / `hard` / `strong` / `smart` / `high` → [`TierKind::Complex`]
+    pub fn classify(&self, s: &str) -> TierKind {
+        let s = s.trim().to_lowercase();
+        if s.is_empty() {
+            return TierKind::Other;
+        }
+
+        if let Some(fb) = &self.fallback {
+            if fb.simple.model.to_lowercase() == s {
+                return TierKind::Simple;
+            }
+            if fb.complex.model.to_lowercase() == s {
+                return TierKind::Complex;
+            }
+        }
+
+        // Domain tiers sit off the simple/complex axis.
+        if self.tiers.iter().any(|t| t.model.to_lowercase() == s) {
+            return TierKind::Other;
+        }
+
+        match s.as_str() {
+            "simple" | "flash" | "fast" | "easy" | "cheap" | "low" | "mini" | "weak" => {
+                TierKind::Simple
+            }
+            "complex" | "pro" | "hard" | "strong" | "smart" | "high" | "max" | "heavy" => {
+                TierKind::Complex
+            }
+            _ => TierKind::Other,
+        }
     }
 }
 
@@ -1251,8 +1309,8 @@ struct FbEntry {
 
 #[derive(Debug, Clone, Default)]
 struct TermAgg {
-    pro_votes: usize,
-    flash_votes: usize,
+    complex_votes: usize,
+    simple_votes: usize,
     req_ids: Vec<String>,
 }
 
@@ -1316,15 +1374,26 @@ fn req_terms(v: &serde_json::Value) -> Vec<(String, i32)> {
 
 /// Aggregates a journal (one JSON object per line) and produces keyword-change
 /// proposals. Pure and deterministic — no file I/O, no config mutation.
-pub fn analyze_journal(lines: &[&str], keywords: &ScoringKeywords) -> Vec<Proposal> {
-    analyze_journal_with(lines, keywords, &AnalyzerConfig::default())
+///
+/// Feedback `correct_tier` values are classified through
+/// [`TiersConfig::classify`], so any configured model (or a semantic alias)
+/// is understood — nothing here knows the names `pro` or `flash`.
+pub fn analyze_journal(lines: &[&str], config: &TiersConfig) -> Vec<Proposal> {
+    analyze_journal_with(
+        lines,
+        &config.keywords,
+        &AnalyzerConfig::default(),
+        &|s| config.classify(s),
+    )
 }
 
-/// [`analyze_journal`] with explicit thresholds (used by tests).
+/// [`analyze_journal`] with an explicit classifier and thresholds (used by
+/// tests and by callers that want a custom tier mapping).
 pub fn analyze_journal_with(
     lines: &[&str],
     keywords: &ScoringKeywords,
     cfg: &AnalyzerConfig,
+    classify: &dyn Fn(&str) -> TierKind,
 ) -> Vec<Proposal> {
     // 1. Parse req/fb lines and index requests by id.
     let mut reqs: HashMap<String, serde_json::Value> = HashMap::new();
@@ -1355,17 +1424,17 @@ pub fn analyze_journal_with(
         }
     }
 
-    // 2. Aggregate per term: how many corrections pushed pro vs flash.
+    // 2. Aggregate per term: how many corrections pushed toward complex vs simple.
     let mut agg: HashMap<String, TermAgg> = HashMap::new();
     for fb in &fbs {
         if let Some(req) = reqs.get(&fb.req_id) {
             for (term, _w) in req_terms(req) {
                 let e = agg.entry(term.clone()).or_default();
                 e.req_ids.push(fb.req_id.clone());
-                match fb.correct_tier.as_str() {
-                    "pro" => e.pro_votes += 1,
-                    "flash" => e.flash_votes += 1,
-                    _ => {}
+                match classify(&fb.correct_tier) {
+                    TierKind::Complex => e.complex_votes += 1,
+                    TierKind::Simple => e.simple_votes += 1,
+                    TierKind::Other => {}
                 }
             }
         }
@@ -1378,7 +1447,8 @@ pub fn analyze_journal_with(
 
     for (term, a) in agg.iter() {
         let lang = detect_language(term);
-        let ratio = (a.pro_votes as f64) / ((a.pro_votes + a.flash_votes).max(1) as f64);
+        let ratio =
+            (a.complex_votes as f64) / ((a.complex_votes + a.simple_votes).max(1) as f64);
 
         match find_existing(keywords, term) {
             // ── Existing term: adjust or remove ──
@@ -1387,8 +1457,8 @@ pub fn analyze_journal_with(
                     req_ids: a.req_ids.clone(),
                     correct_tier_ratio: ratio,
                 };
-                // Technical term repeatedly corrected to Flash → weaken it.
-                if target == "technical_keywords" && a.flash_votes >= cfg.adjust_min_reqs {
+                // Technical term repeatedly corrected toward simple → weaken it.
+                if target == "technical_keywords" && a.simple_votes >= cfg.adjust_min_reqs {
                     counter += 1;
                     let new_weight = cur - 1;
                     proposals.push(if new_weight < 0 {
@@ -1401,8 +1471,8 @@ pub fn analyze_journal_with(
                             term: term.clone(),
                             weight: 0,
                             reason: format!(
-                                "{} requête(s) corrigée(s) vers Flash et poids déjà au minimum",
-                                a.flash_votes
+                                "{} requête(s) corrigée(s) vers un tier simple, poids déjà au minimum",
+                                a.simple_votes
                             ),
                             evidence,
                         }
@@ -1416,15 +1486,15 @@ pub fn analyze_journal_with(
                             term: term.clone(),
                             weight: new_weight,
                             reason: format!(
-                                "{} requête(s) corrigée(s) vers Flash",
-                                a.flash_votes
+                                "{} requête(s) corrigée(s) vers un tier simple",
+                                a.simple_votes
                             ),
                             evidence,
                         }
                     });
                 }
-                // Simple term repeatedly corrected to Pro → weaken the counterweight.
-                else if target == "simple_keywords" && a.pro_votes >= cfg.adjust_min_reqs {
+                // Simple term repeatedly corrected toward complex → weaken the counterweight.
+                else if target == "simple_keywords" && a.complex_votes >= cfg.adjust_min_reqs {
                     counter += 1;
                     let new_weight = cur + 1;
                     proposals.push(if new_weight >= 0 {
@@ -1437,8 +1507,8 @@ pub fn analyze_journal_with(
                             term: term.clone(),
                             weight: 0,
                             reason: format!(
-                                "{} requête(s) corrigée(s) vers Pro, contre-poids devenu inutile",
-                                a.pro_votes
+                                "{} requête(s) corrigée(s) vers un tier complex, contre-poids devenu inutile",
+                                a.complex_votes
                             ),
                             evidence,
                         }
@@ -1451,7 +1521,10 @@ pub fn analyze_journal_with(
                             language: lang.to_string(),
                             term: term.clone(),
                             weight: new_weight,
-                            reason: format!("{} requête(s) corrigée(s) vers Pro", a.pro_votes),
+                            reason: format!(
+                                "{} requête(s) corrigée(s) vers un tier complex",
+                                a.complex_votes
+                            ),
                             evidence,
                         }
                     });
@@ -1459,7 +1532,7 @@ pub fn analyze_journal_with(
             }
             // ── Unlisted term: promote into the config ──
             None => {
-                if a.pro_votes >= cfg.promote_min_reqs {
+                if a.complex_votes >= cfg.promote_min_reqs {
                     counter += 1;
                     proposals.push(Proposal {
                         id: format!("prop-{:03}", counter),
@@ -1470,15 +1543,15 @@ pub fn analyze_journal_with(
                         term: term.clone(),
                         weight: 1,
                         reason: format!(
-                            "{} requête(s) corrigée(s) vers Pro contenaient ce terme",
-                            a.pro_votes
+                            "{} requête(s) corrigée(s) vers un tier complex contenaient ce terme",
+                            a.complex_votes
                         ),
                         evidence: Evidence {
                             req_ids: a.req_ids.clone(),
                             correct_tier_ratio: ratio,
                         },
                     });
-                } else if a.flash_votes >= cfg.promote_min_reqs {
+                } else if a.simple_votes >= cfg.promote_min_reqs {
                     counter += 1;
                     proposals.push(Proposal {
                         id: format!("prop-{:03}", counter),
@@ -1489,8 +1562,8 @@ pub fn analyze_journal_with(
                         term: term.clone(),
                         weight: -3,
                         reason: format!(
-                            "{} requête(s) corrigée(s) vers Flash contenaient ce terme",
-                            a.flash_votes
+                            "{} requête(s) corrigée(s) vers un tier simple contenaient ce terme",
+                            a.simple_votes
                         ),
                         evidence: Evidence {
                             req_ids: a.req_ids.clone(),
@@ -1815,6 +1888,80 @@ languages:
         .to_string()
     }
 
+    // Maps a test correction string to a TierKind, mirroring a real
+    // TiersConfig whose fallback models are "acme-mini" (simple) /
+    // "acme-max" (complex). Kept independent of the classifier under test.
+    fn classify(s: &str) -> TierKind {
+        match s {
+            "pro" | "complex" | "acme-max" => TierKind::Complex,
+            "flash" | "simple" | "acme-mini" => TierKind::Simple,
+            _ => TierKind::Other,
+        }
+    }
+
+    fn test_config() -> TiersConfig {
+        TiersConfig {
+            port: 8001,
+            host: "127.0.0.1".into(),
+            proxy_key: None,
+            tiers: vec![],
+            fallback: Some(FallbackConfig {
+                threshold: 2,
+                simple: FallbackTier {
+                    model: "acme-mini".into(),
+                    api_base: "https://example.com".into(),
+                    api_key: "k".into(),
+                    auth_header: "Bearer".into(),
+                },
+                complex: FallbackTier {
+                    model: "acme-max".into(),
+                    api_base: "https://example.com".into(),
+                    api_key: "k".into(),
+                    auth_header: "Bearer".into(),
+                },
+            }),
+            keywords: ScoringKeywords::default(),
+            keywords_path: "keywords.yaml".into(),
+            journal_path: "journal.jsonl".into(),
+        }
+    }
+
+    #[test]
+    fn tiers_config_classifies_model_names_and_aliases() {
+        let cfg = test_config();
+        // Exact model names (case-insensitive).
+        assert_eq!(cfg.classify("acme-mini"), TierKind::Simple);
+        assert_eq!(cfg.classify("ACME-MAX"), TierKind::Complex);
+        // Generic aliases work even without a matching model name.
+        assert_eq!(cfg.classify("pro"), TierKind::Complex);
+        assert_eq!(cfg.classify("complex"), TierKind::Complex);
+        assert_eq!(cfg.classify("flash"), TierKind::Simple);
+        assert_eq!(cfg.classify("simple"), TierKind::Simple);
+        // Unknown / empty → Other.
+        assert_eq!(cfg.classify("gpt-4o"), TierKind::Other);
+        assert_eq!(cfg.classify(""), TierKind::Other);
+    }
+
+    #[test]
+    fn analyze_accepts_semantic_kinds() {
+        // The analyzer must understand "complex"/"simple" (the normalized
+        // feedback values) exactly like the legacy "pro"/"flash" aliases.
+        let kw = ScoringKeywords::default();
+        let lines: Vec<String> = (0..5)
+            .flat_map(|i| {
+                vec![
+                    req_line(&format!("r{i}"), &["refactoriser"]),
+                    fb_line(&format!("r{i}"), "complex"),
+                ]
+            })
+            .collect();
+        let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        let proposals = analyze_journal_with(&refs, &kw, &AnalyzerConfig::default(), &classify);
+        assert!(proposals
+            .iter()
+            .any(|p| p.prop_type == "add" && p.term == "refactoriser"));
+    }
+
     #[test]
     fn analyze_promotes_unlisted_term_to_technical() {
         // 5 reqs all corrected to Pro, matching "refactoriser" (unlisted).
@@ -1829,7 +1976,7 @@ languages:
             .collect();
         let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
 
-        let proposals = analyze_journal(&refs, &kw);
+        let proposals = analyze_journal_with(&refs, &kw, &AnalyzerConfig::default(), &classify);
         let add = proposals
             .iter()
             .find(|p| p.prop_type == "add" && p.term == "refactoriser")
@@ -1853,7 +2000,7 @@ languages:
             .collect();
         let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
 
-        let proposals = analyze_journal(&refs, &kw);
+        let proposals = analyze_journal_with(&refs, &kw, &AnalyzerConfig::default(), &classify);
         let adjust = proposals
             .iter()
             .find(|p| p.term == "explique")
@@ -1876,7 +2023,7 @@ languages:
             .collect();
         let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
 
-        let proposals = analyze_journal(&refs, &kw);
+        let proposals = analyze_journal_with(&refs, &kw, &AnalyzerConfig::default(), &classify);
         let add = proposals
             .iter()
             .find(|p| p.prop_type == "add" && p.term == "refactoriser")
@@ -1891,7 +2038,7 @@ languages:
         let kw = ScoringKeywords::default();
         let lines: Vec<String> = (0..3).map(|i| req_line(&format!("r{i}"), &["explique"])).collect();
         let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
-        assert!(analyze_journal(&refs, &kw).is_empty());
+        assert!(analyze_journal_with(&refs, &kw, &AnalyzerConfig::default(), &classify).is_empty());
     }
 
     #[test]
