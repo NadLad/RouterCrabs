@@ -322,6 +322,8 @@ The workflow is strictly: observe → propose → human approve → apply.
 Scans the journal, joins each `fb` line to its originating `req`, aggregates
 feedback per term, and writes **edit proposals** as YAML files in
 `<config-dir>/proposals/`. It only *reads* the config — it never modifies it.
+The config is resolved from `$HOME/.config/routercrabs/tiers.yaml` when
+`TIERS_CONFIG` is unset, so the CLI works from any working directory.
 
 ```bash
 router-crabs analyze
@@ -391,7 +393,7 @@ RUST_LOG=debug cargo run --release
 
 | Variable | Default | Description |
 |---|---|---|
-| `TIERS_CONFIG` | `tiers.yaml` | Path to the YAML config |
+| `TIERS_CONFIG` | `~/.config/routercrabs/tiers.yaml` | Path to the YAML config (when unset, the CLI and the server fall back to the real config location — `tiers.yaml` relative only if `HOME` is empty) |
 | `PORT` | `8001` | Listening port |
 | `RUST_LOG` | `info,router_crabs=debug` | Log level |
 | `*_API_KEY` | — | API keys (referenced in `tiers.yaml` via `${VAR}`) |
