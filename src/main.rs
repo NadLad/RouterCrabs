@@ -262,8 +262,18 @@ async fn record_feedback(
 // ── CLI: analyze / apply ──────────────────────────────────────────────
 
 /// Path to the tiers config, resolved the same way as the server.
+/// Falls back to the real config location ($HOME/.config/routercrabs/tiers.yaml)
+/// so the CLI works from any working directory — not just the service's
+/// `WorkingDirectory`.
 fn config_path() -> String {
-    std::env::var("TIERS_CONFIG").unwrap_or_else(|_| "tiers.yaml".into())
+    std::env::var("TIERS_CONFIG").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        if home.is_empty() {
+            "tiers.yaml".into()
+        } else {
+            format!("{home}/.config/routercrabs/tiers.yaml")
+        }
+    })
 }
 
 /// Directory containing `tiers.yaml` — the anchor for the relative
