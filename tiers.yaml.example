@@ -1,7 +1,13 @@
-# RouterCrabs — hybrid configuration example
+# RouterCrabs — complete multi-provider configuration example
 #
-# Phase 1 — Domain keywords: if keywords match → domain tier
-# Phase 2 — Complexity: otherwise, complexity heuristics → simple or complex
+# RouterCrabs is provider-agnostic: routing, journaling, feedback and the
+# RSI loop all operate on *configured tiers* and the semantic simple/complex
+# axis. Nothing here is tied to DeepSeek — swap any model/api_base/key.
+#
+# Routing phases:
+#   Phase 1 — Domain keywords: if keywords match → domain tier
+#   Phase 2 — Complexity: otherwise, complexity heuristics → simple or complex
+#   Phase 3 — default: true tier (if no fallback section)
 #
 # Complexity score = objective heuristics + signed keyword weights
 # (a signed integer — it can go negative):
@@ -18,45 +24,57 @@ host: "127.0.0.1"
 
 # Path to the append-only JSONL journal (default: journal.jsonl).
 # Written at chmod 600; every request is logged as one JSON line.
-# journal_path: "journal.jsonl"
+journal_path: "journal.jsonl"
 
-# ── Domain tiers (keywords) ──────────────────────────
-# Add your business domains here. Keywords use case-insensitive
-# substring matching. Score = match_count × weight.
+# ── Domain tiers (keywords) ──────────────────────────────────────────
+# Phase 1 of routing: keywords match → this tier wins (score × weight).
 # Ties are broken by weight, then default: true.
 tiers:
-  # Example: agriculture domain
-  # - model: "agrillm-v2"
-  #   api_base: "https://api.agrillm.com/v1"
-  #   api_key: "${AGRI_API_KEY}"
-  #   keywords: [agriculture, agronomy, soil, plant, harvest, farm, livestock]
-  #   weight: 20
 
-  # Example: code domain
-  # - model: "deepseek-v4-pro"
-  #   api_base: "https://api.deepseek.com"
-  #   api_key: "${DEEPSEEK_API_KEY}"
-  #   keywords: [code, Rust, Python, deployment, API, database, SQL, Docker]
+  # Groq (Llama) — handles anything about resumes / cover letters.
+  # Example: "Rédige une lettre de motivation" → routed to Llama on Groq.
+  - model: "llama-3.3-70b-versatile"
+    api_base: "https://api.groq.com/openai"
+    api_key: "${GROQ_API_KEY}"
+    auth_header: "Bearer"                 # default — omit it if unused
+    keywords: ["resume", "cv", "cover letter", "motivation letter"]
+    weight: 20
+
+  # Local vLLM server — code reviews, refactors, SQL.
+  # Example: "refactor ce module rust" → routed to the local vLLM.
+  - model: "qwen2.5-coder-32b"
+    api_base: "http://127.0.0.1:8000/v1"
+    api_key: "${VLLM_API_KEY}"            # vLLM ignores it, but keep the key
+    auth_header: "Bearer"
+    keywords: ["refactor", "debug", "sql", "rust", "python", "docker"]
+    weight: 15
+
+  # Alternative: a provider with non-Bearer auth (e.g. native Anthropic).
+  # - model: "claude-sonnet-4"
+  #   api_base: "https://api.anthropic.com"
+  #   api_key: "${ANTHROPIC_API_KEY}"
+  #   auth_header: "x-api-key"            # <-- non-Bearer header
+  #   keywords: ["anthropic-specific-domain"]
   #   weight: 10
 
-  # Ultimate fallback (if neither keywords nor complexity are configured)
-  - model: "deepseek-v4-flash"
+# ── Complexity routing (fallback) ────────────────────────────────────
+# Phase 2: when no domain keyword matches, score the prompt complexity and
+# pick simple (fast/cheap) or complex (strong) from the fallback pair.
+fallback:
+  threshold: 2
+  simple:
+    model: "deepseek-v4-flash"
     api_base: "https://api.deepseek.com"
     api_key: "${DEEPSEEK_API_KEY}"
-    keywords: []
-    default: true
+  complex:
+    model: "deepseek-v4-pro"
+    api_base: "https://api.deepseek.com"
+    api_key: "${DEEPSEEK_API_KEY}"
 
-# ── Complexity routing (optional but recommended) ─────
-# Activated when no domain keywords match.
-# Uncomment the section to enable it:
-#
-# fallback:
-#   threshold: 3
-#   simple:
-#     model: "deepseek-v4-flash"
+# ── Ultimate default (optional) ──────────────────────────────────────
+# If you have no `fallback` section, mark exactly one tier `default: true`.
+#   - model: "deepseek-v4-flash"
 #     api_base: "https://api.deepseek.com"
 #     api_key: "${DEEPSEEK_API_KEY}"
-#   complex:
-#     model: "deepseek-v4-pro"
-#     api_base: "https://api.deepseek.com"
-#     api_key: "${DEEPSEEK_API_KEY}"
+#     keywords: []
+#     default: true
