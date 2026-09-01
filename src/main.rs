@@ -9,7 +9,7 @@ use reqwest::Client;
 use router_crabs::{
     analyze_journal, apply_proposal_to_yaml, ChatRequest, forward_request,
     matched_keyword_weights, matched_technical_keywords, score_complexity, select_tier, Proposal,
-    TiersConfig,
+    TierKind, TiersConfig,
 };
 use serde::Deserialize;
 use std::fs::{File, OpenOptions};
@@ -146,11 +146,9 @@ async fn chat_completions(
     let score = score_complexity(&req.messages, &state.config.keywords);
     let matched = matched_technical_keywords(&req.messages, &state.config.keywords);
     let weights = matched_keyword_weights(&req.messages, &state.config.keywords);
-    let routed = match tier.name.as_str() {
-        "simple-fallback" => "flash",
-        "complex-fallback" => "pro",
-        other => other,
-    };
+    // Record the actual model that served the request — provider-agnostic,
+    // no hardcoded `flash`/`pro` aliases in the journal.
+    let routed = tier.model.as_str();
 
     let entry = serde_json::json!({
         "type": "req",
@@ -198,8 +196,11 @@ async fn chat_completions(
     }
 }
 
-/// Feedback body: `{"correction": "pro"|"flash"}` (alias `correct_tier`).
-/// `source` defaults to `"slash"` (the explicit `/pro` and `/flash` commands).
+/// Feedback body: `{"correction": "<model-or-kind>"}` (alias `correct_tier`).
+/// The value is classified via [`TiersConfig::classify`]: a configured model
+/// name, or a generic alias (`pro`/`complex`/`strong` → complex tier,
+/// `flash`/`simple`/`fast` → simple tier). `source` defaults to `"slash"`
+/// (the explicit `/pro` and `/flash` commands).
 #[derive(Debug, Deserialize)]
 struct FeedbackRequest {
     #[serde(alias = "correct_tier")]
@@ -218,14 +219,23 @@ async fn record_feedback(
     State(state): State<Arc<AppState>>,
     Json(body): Json<FeedbackRequest>,
 ) -> Response {
-    let correction = body.correction.to_lowercase();
-    if correction != "pro" && correction != "flash" {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "correction must be 'pro' or 'flash'"})),
-        )
-            .into_response();
-    }
+    let kind = state.config.classify(&body.correction);
+    let kind_str = match kind {
+        TierKind::Complex => "complex",
+        TierKind::Simple => "simple",
+        TierKind::Other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!(
+                        "unknown tier '{}' — expected a configured model name or simple/complex",
+                        body.correction
+                    )
+                })),
+            )
+                .into_response();
+        }
+    };
 
     let req_id = match state.last_req_id.lock().unwrap().clone() {
         Some(id) => id,
@@ -242,7 +252,7 @@ async fn record_feedback(
         "type": "fb",
         "req_id": req_id,
         "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        "correct_tier": correction,
+        "correct_tier": kind_str,
         "source": body.source,
     });
 
@@ -313,7 +323,7 @@ fn run_analyze() -> anyhow::Result<()> {
         .collect::<Result<_, _>>()?;
     let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
 
-    let proposals = analyze_journal(&refs, &config.keywords);
+    let proposals = analyze_journal(&refs, &config);
 
     let proposals_dir = dir.join("proposals");
     std::fs::create_dir_all(&proposals_dir)?;

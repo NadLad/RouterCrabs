@@ -261,6 +261,103 @@ fallback:
 
 ---
 
+## Adding a Provider / Model
+
+RouterCrabs is **provider-agnostic**. Nothing in the code knows the names
+`deepseek`, `pro` or `flash` — routing, journaling, feedback and the RSI loop
+all operate on *configured tiers* and the semantic `simple`/`complex` axis.
+Adding a model, a provider, or a whole variant family is **a YAML edit only** —
+no Rust, no recompile, no new slash commands.
+
+A tier is just a block with a model identifier, an OpenAI-compatible endpoint,
+a key and (optionally) routing keywords:
+
+```yaml
+- model: "llama-3.3-70b-versatile"     # any identifier you like
+  api_base: "https://api.groq.com/openai"   # OpenAI-compatible base
+  api_key: "${GROQ_API_KEY}"           # env var, never hardcoded
+  auth_header: "Bearer"                # default; "x-api-key" for some providers
+  keywords: [resume, cv, cover letter] # domain routing
+  weight: 20
+```
+
+### Complete multi-provider example — `tiers.yaml`
+
+This example shows every feature at once: two **domain tiers** (a Groq
+endpoint for resume-writing, a local vLLM for code), a DeepSeek fallback pair,
+a custom auth header, and the journal enabled.
+
+```yaml
+# RouterCrabs — complete multi-provider configuration
+port: 8001
+host: "127.0.0.1"
+
+# Keywords scoring file + request journal (both relative to this config dir)
+keywords_path: "keywords.yaml"
+journal_path: "journal.jsonl"
+
+# ── Domain tiers (keywords) ──────────────────────────────────────────
+# Phase 1 of routing: keywords match → this tier wins (score × weight).
+tiers:
+
+  # Groq (Llama) — handles anything about resumes / cover letters.
+  - model: "llama-3.3-70b-versatile"
+    api_base: "https://api.groq.com/openai"
+    api_key: "${GROQ_API_KEY}"
+    auth_header: "Bearer"
+    keywords: ["resume", "cv", "cover letter", "motivation letter"]
+    weight: 20
+
+  # Local vLLM server — code reviews, refactors, SQL.
+  - model: "qwen2.5-coder-32b"
+    api_base: "http://127.0.0.1:8000/v1"
+    api_key: "${VLLM_API_KEY}"            # vLLM ignores it, but keep the key
+    keywords: ["refactor", "debug", "sql", "rust", "python", "docker"]
+    weight: 15
+
+# ── Complexity routing (fallback) ────────────────────────────────────
+# Phase 2: when no domain keyword matches, score the prompt complexity and
+# pick simple (fast/cheap) or complex (strong) from the fallback pair.
+fallback:
+  threshold: 2
+  simple:
+    model: "deepseek-v4-flash"
+    api_base: "https://api.deepseek.com"
+    api_key: "${DEEPSEEK_API_KEY}"
+  complex:
+    model: "deepseek-v4-pro"
+    api_base: "https://api.deepseek.com"
+    api_key: "${DEEPSEEK_API_KEY}"
+```
+
+### Rules of thumb
+
+| Want | Change |
+|---|---|
+| New model on an existing provider | Add a `tiers[]` block (keywords) **or** swap a `fallback.simple/complex` model |
+| New provider (OpenAI-compatible) | Add a tier block with its `api_base` + `${VAR}` key |
+| Provider with non-`Bearer` auth | Set `auth_header` (e.g. `x-api-key`) |
+| Route a *domain* to a specific model | Add `keywords` + `weight` to its tier block |
+| Make a tier the ultimate default | `default: true` on exactly one tier |
+
+### What does NOT change
+
+- **Feedback** (`POST /v1/feedback`, `/pro` `/flash`) — the value is
+  classified against the configured tiers; a new provider works with **zero
+  new commands**.
+- **`router-crabs analyze` / `apply`** — proposals are generated per term and
+  filed by language, independent of which provider produced the correction.
+- **Journaling** — `routed` records the actual model name, whatever it is.
+
+> **Compatibility note:** every tier is expected to speak the
+> **OpenAI-compatible** protocol (`POST {api_base}/chat/completions`, SSE
+> streaming). DeepSeek, OpenAI, Mistral, Groq, OpenRouter, Together, vLLM,
+> Ollama, LM Studio and llama.cpp all do. A provider with a proprietary,
+> non-OpenAI API (e.g. Anthropic's native `/v1/messages`) needs a small
+> request/response adapter — a new layer, not a rewrite.
+
+---
+
 ## Request Journal & Feedback
 
 Every request is appended to an **append-only JSONL journal** (`journal.jsonl`,
@@ -269,7 +366,7 @@ later learning possible (feedback → analysis → keyword updates).
 
 **`req` line** — written on every request:
 ```json
-{"type":"req","id":"ab3b89c6-…","ts":"2026-08-27T21:16:20Z","profile":"unknown","prompt":"explique l'architecture des microservices","prompt_truncated":false,"score":3,"matched":["explique","architecture","microservice"],"weights":[["explique",1],["architecture",1],["microservice",1]],"routed":"pro","reason":"complexity: high (score: 3, threshold: 3)"}
+{"type":"req","id":"ab3b89c6-…","ts":"2026-08-27T21:16:20Z","profile":"unknown","prompt":"explique l'architecture des microservices","prompt_truncated":false,"score":3,"matched":["explique","architecture","microservice"],"weights":[["explique",1],["architecture",1],["microservice",1]],"routed":"deepseek-v4-pro","reason":"complexity: high (score: 3, threshold: 3)"}
 ```
 
 | Field | Type | Description |
@@ -283,31 +380,41 @@ later learning possible (feedback → analysis → keyword updates).
 | `score` | int | Complexity score — a **signed** integer (can be negative) |
 | `matched` | array | Technical keywords that matched |
 | `weights` | array | Matched keywords with their signed weight (`[term, weight]` pairs) |
-| `routed` | string | `"pro"`, `"flash"`, or the domain tier name |
+| `routed` | string | The **actual model** that served the request (e.g. `deepseek-v4-pro`, `qwen2.5-72b`) |
 | `reason` | string | Human-readable routing reason |
 
 **`fb` line** — written when explicit feedback arrives via
-`POST /v1/feedback`:
+`POST /v1/feedback`. The `correct_tier` value is stored as its normalized
+**semantic kind** — `"simple"` or `"complex"` — regardless of which model
+name (or alias) the client sent:
 ```json
-{"type":"fb","req_id":"ab3b89c6-…","ts":"2026-08-27T21:16:39Z","correct_tier":"flash","source":"slash"}
+{"type":"fb","req_id":"ab3b89c6-…","ts":"2026-08-27T21:16:39Z","correct_tier":"complex","source":"slash"}
 ```
 
-Feedback endpoint:
+Feedback endpoint — `correction` is **model-agnostic**: send any configured
+model name, or a generic alias (`pro`/`complex`/`strong` → complex tier,
+`flash`/`simple`/`fast` → simple tier). Unknown values return HTTP 400:
 ```bash
-# "The last request should have gone to Flash" (it went to Pro)
+# "The last request should have gone to the simple tier" (it went complex)
 curl -s -X POST http://localhost:8001/v1/feedback \
   -H "Content-Type: application/json" \
   -d '{"correction":"flash"}'
 
-# "The last request should have gone to Pro" (it went to Flash)
+# "The last request should have gone to the complex tier" (it went simple)
 curl -s -X POST http://localhost:8001/v1/feedback \
   -H "Content-Type: application/json" \
-  -d '{"correction":"pro"}'
+  -d '{"correction":"deepseek-v4-pro"}'
+
+# Full model names work too — matched against the configured tiers
+curl -s -X POST http://localhost:8001/v1/feedback \
+  -H "Content-Type: application/json" \
+  -d '{"correction":"qwen2.5-72b"}'
 ```
 
-`correction` accepts `"pro"` or `"flash"` (or `correct_tier` as an alias);
-anything else returns HTTP 400. `source` defaults to `"slash"` (explicit
-`/pro` and `/flash` commands) — pass `"agent"` for agent self-assessment.
+`source` defaults to `"slash"` (explicit `/pro` and `/flash` commands) — pass
+`"agent"` for agent self-assessment. The `/pro` `/flash` commands are just
+shortcuts for "complex"/"simple" — adding a new provider requires **zero** new
+commands.
 
 ---
 
